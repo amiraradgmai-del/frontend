@@ -1,0 +1,6 @@
+import { BookOpenCheck, FileCheck2, ShieldCheck } from "lucide-react";
+import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+
+export default function DocumentsPage() {
+  return <div className="space-y-7"><header><p className="text-sm font-medium text-primary">بانک دانش</p><h1 className="mt-1 text-3xl font-black">منابع و اسناد</h1><p className="mt-2 text-muted-foreground">پاسخ‌ها فقط از نسخه‌های تأییدشده و معتبر ساخته می‌شوند.</p></header><div className="grid gap-4 sm:grid-cols-3">{[[BookOpenCheck,"منابع رسمی","قوانین، بخشنامه‌ها و راهنماهای رسمی"],[FileCheck2,"نسخه معتبر","کنترل تاریخ شروع و پایان اعتبار"],[ShieldCheck,"بازبینی انسانی","تأیید هر نسخه توسط نقش مجاز"]].map(([Icon,title,text]) => { const IconComponent = Icon as typeof BookOpenCheck; return <Card key={title as string} className="border-white/70 bg-white/80"><CardHeader><div className="mb-3 flex size-11 items-center justify-center rounded-xl bg-primary/10 text-primary"><IconComponent /></div><CardTitle>{title as string}</CardTitle></CardHeader><CardContent className="text-sm leading-7 text-muted-foreground">{text as string}</CardContent></Card>; })}</div><div className="rounded-2xl border border-dashed bg-white/50 p-10 text-center text-sm text-muted-foreground">فهرست عمومی منابع پس از ورود و تأیید اسناد واقعی نمایش داده می‌شود.</div></div>;
+}

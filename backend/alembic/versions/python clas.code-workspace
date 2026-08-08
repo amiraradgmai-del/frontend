@@ -1,0 +1,15 @@
+{
+	"folders": [
+		{
+			"path": "../../.."
+		}
+	],
+	"extensions": {
+		"recommendations": [
+			"saoudrizwan.claude-dev"
+		]
+	},
+	"settings": {
+		"git.ignoreLimitWarning": true
+	}
+}

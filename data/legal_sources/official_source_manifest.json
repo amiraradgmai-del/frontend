@@ -1,0 +1,112 @@
+{
+  "schema_version": "1.0",
+  "as_of": "2026-07-18",
+  "jurisdiction": "IR",
+  "production_ready": false,
+  "policy": {
+    "official_sources_only": true,
+    "human_legal_approval_required": true,
+    "incomplete_sources_are_retrieval_eligible": false,
+    "allowed_domains": [
+      "qavanin.ir",
+      "dotic.ir",
+      "rrk.ir",
+      "intamedia.ir",
+      "tax.gov.ir",
+      "rc.majlis.ir",
+      "parliran.ir",
+      "divan-edalat.ir"
+    ]
+  },
+  "confirmed_primary_sources": [
+    {
+      "source_id": "LAW-DIRECT",
+      "title": "قانون مالیات‌های مستقیم با اصلاحات و الحاقات بعدی",
+      "document_type": "law",
+      "issuer": "مجلس شورای اسلامی",
+      "approval_date": "1366/12/03",
+      "url": "https://qavanin.ir/Law/TreeText/?IDS=892583840653829785",
+      "minimum_unique_articles": 250,
+      "status": "source_confirmed_download_blocked"
+    },
+    {
+      "source_id": "LAW-VAT",
+      "title": "قانون مالیات بر ارزش افزوده با اصلاحات و الحاقات بعدی",
+      "document_type": "law",
+      "issuer": "مجلس شورای اسلامی",
+      "approval_date": "1400/03/02",
+      "url": "https://qavanin.ir/Law/TreeText/?IDS=17874811672232780652",
+      "minimum_unique_articles": 57,
+      "status": "source_confirmed_download_blocked"
+    },
+    {
+      "source_id": "LAW-TERMINAL",
+      "title": "قانون پایانه‌های فروشگاهی و سامانه مؤدیان با اصلاحات و الحاقات بعدی",
+      "document_type": "law",
+      "issuer": "مجلس شورای اسلامی",
+      "approval_date": "1398/07/21",
+      "url": "https://qavanin.ir/Law/TreeText/?IDS=12936955486234542481",
+      "minimum_unique_articles": 29,
+      "status": "source_confirmed_download_blocked"
+    },
+    {
+      "source_id": "LAW-EASE",
+      "title": "قانون تسهیل تکالیف مؤدیان جهت اجرای قانون پایانه‌های فروشگاهی و سامانه مؤدیان",
+      "document_type": "law",
+      "issuer": "مجلس شورای اسلامی",
+      "approval_date": "1402/08/23",
+      "url": "https://qavanin.ir/Law/TreeText/?IDS=4822349448318190655",
+      "minimum_unique_articles": 5,
+      "status": "source_confirmed_download_blocked"
+    }
+  ],
+  "official_collections": [
+    {
+      "collection_id": "TAX-AUTHORITY-ISSUANCES",
+      "title": "مصوبات، بخشنامه‌ها و دستورالعمل‌های سازمان امور مالیاتی",
+      "url": "https://dotic.ir/p/legislativebranch/540",
+      "known_record_count": 528,
+      "status": "catalog_confirmed_pagination_blocked"
+    },
+    {
+      "collection_id": "NATIONAL-LAW-REGISTRY",
+      "title": "سامانه ملی قوانین و مقررات جمهوری اسلامی ایران",
+      "url": "https://qavanin.ir",
+      "status": "official_registry"
+    },
+    {
+      "collection_id": "OFFICIAL-GAZETTE",
+      "title": "روزنامه رسمی جمهوری اسلامی ایران",
+      "url": "https://rrk.ir",
+      "status": "official_registry"
+    },
+    {
+      "collection_id": "ADMINISTRATIVE-JUSTICE",
+      "title": "آرای هیأت عمومی و هیأت تخصصی مالیاتی دیوان عدالت اداری",
+      "url": "https://divan-edalat.ir",
+      "status": "official_registry"
+    }
+  ],
+  "required_scope": [
+    "قانون مالیات‌های مستقیم و تمام اصلاحات، الحاقات، تفاسیر و قوانین تنقیحی",
+    "قانون مالیات بر ارزش افزوده فعلی و مقررات انتقالی قانون پیشین",
+    "قانون پایانه‌های فروشگاهی و سامانه مؤدیان و قانون تسهیل تکالیف",
+    "قانون مالیات بر سوداگری و سفته‌بازی و مقررات اجرایی آن",
+    "احکام مالیاتی قوانین بودجه سنواتی و قوانین برنامه توسعه",
+    "احکام مالیاتی قوانین دائمی، تولید، دانش‌بنیان، بازار سرمایه و تأمین مالی",
+    "قوانین و مقررات مناطق آزاد تجاری-صنعتی و مناطق ویژه اقتصادی",
+    "موافقت‌نامه‌های اجتناب از اخذ مالیات مضاعف و مقررات مالیات بین‌الملل",
+    "تمام آیین‌نامه‌های اجرایی مواد قوانین مالیاتی و اصلاحیه‌های آنها",
+    "تمام بخشنامه‌ها، دستورالعمل‌ها، شیوه‌نامه‌ها و اطلاعیه‌های سازمان امور مالیاتی",
+    "مشخصات فنی صورتحساب الکترونیکی، حافظه مالیاتی و شرکت‌های معتمد",
+    "آرای هیأت عمومی شورای عالی مالیاتی و نظریات لازم‌الاتباع",
+    "تصمیم‌ها و دستورهای وزیر امور اقتصادی و دارایی در حوزه مالیات",
+    "آرای هیأت عمومی و هیأت تخصصی مالیاتی دیوان عدالت اداری",
+    "ارزش‌های معاملاتی املاک، ضرایب، نصاب‌ها، نرخ‌ها و معافیت‌های سالانه",
+    "بخشودگی جرایم، مواعد، فراخوان‌های ارزش افزوده و تقویم تکالیف",
+    "جرایم و دادرسی مالیاتی، هیأت‌های حل اختلاف و اجرای وصول",
+    "مالیات حقوق، مشاغل، اشخاص حقوقی، املاک، ارث، حق تمبر و درآمد اتفاقی",
+    "مالیات دارایی، عایدی سرمایه، خودرو و املاک با احکام سالانه",
+    "راهنماهای رسمی سامانه مؤدیان، درگاه خدمات مالیاتی و اظهارنامه‌ها"
+  ]
+}

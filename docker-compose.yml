@@ -1,0 +1,260 @@
+services:
+  db:
+    image: public.ecr.aws/docker/library/postgres:17-alpine
+    environment:
+      POSTGRES_DB: tax_ai
+      POSTGRES_USER: tax_ai
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in the root .env file}
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U tax_ai -d tax_ai"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    restart: unless-stopped
+
+  api:
+    build:
+      context: ./backend
+      target: runtime
+
+    environment:
+      TAX_AI_ENVIRONMENT: ${TAX_AI_ENVIRONMENT:-development}
+      TAX_AI_DOCS_ENABLED: ${TAX_AI_DOCS_ENABLED:-true}
+
+      TAX_AI_DATABASE_URL: postgresql+psycopg://tax_ai:${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in the root .env file}@db:5432/tax_ai
+      TAX_AI_JWT_SECRET: ${JWT_SECRET:?Set JWT_SECRET in the root .env file}
+
+      TAX_AI_CELERY_BROKER_URL: redis://redis:6379/0
+      TAX_AI_CELERY_RESULT_BACKEND: redis://redis:6379/1
+
+      TAX_AI_LOCAL_STORAGE_PATH: /app/storage
+
+      TAX_AI_AI_PROVIDER: gemini
+      TAX_AI_GEMINI_API_KEY: ${TAX_AI_GEMINI_API_KEY:-}
+      TAX_AI_GEMINI_BASE_URL: ${TAX_AI_GEMINI_BASE_URL:-https://api.avalai.ir/v1beta}
+      TAX_AI_GEMINI_GENERATION_MODEL: ${TAX_AI_GEMINI_GENERATION_MODEL:-gemini-2.5-flash}
+      TAX_AI_GEMINI_EMBEDDING_MODEL: ${TAX_AI_GEMINI_EMBEDDING_MODEL:-gemini-embedding-001}
+
+      TAX_AI_BOOTSTRAP_ADMIN_EMAIL: ${TAX_AI_BOOTSTRAP_ADMIN_EMAIL:-}
+      TAX_AI_BOOTSTRAP_ADMIN_PASSWORD: ${TAX_AI_BOOTSTRAP_ADMIN_PASSWORD:-}
+      TAX_AI_BOOTSTRAP_ADMIN_FULL_NAME: ${TAX_AI_BOOTSTRAP_ADMIN_FULL_NAME:-مدیر سامانه}
+
+      TAX_AI_EMAIL_DELIVERY_MODE: ${TAX_AI_EMAIL_DELIVERY_MODE:-console}
+      TAX_AI_SMTP_HOST: ${TAX_AI_SMTP_HOST:-}
+      TAX_AI_SMTP_PORT: ${TAX_AI_SMTP_PORT:-587}
+      TAX_AI_SMTP_USERNAME: ${TAX_AI_SMTP_USERNAME:-}
+      TAX_AI_SMTP_PASSWORD: ${TAX_AI_SMTP_PASSWORD:-}
+      TAX_AI_SMTP_FROM_EMAIL: ${TAX_AI_SMTP_FROM_EMAIL:-}
+      TAX_AI_SMTP_FROM_NAME: ${TAX_AI_SMTP_FROM_NAME:-Tax AI Advisor}
+      TAX_AI_SMTP_USE_TLS: ${TAX_AI_SMTP_USE_TLS:-true}
+
+      TAX_AI_WALLET_DAILY_WITHDRAWAL_LIMIT: ${TAX_AI_WALLET_DAILY_WITHDRAWAL_LIMIT:-15000000}
+      TAX_AI_PUBLIC_SITE_URL: ${NEXT_PUBLIC_SITE_URL:-http://localhost:3000}
+
+      TAX_AI_PAYMENT_PROVIDER: ${TAX_AI_PAYMENT_PROVIDER:-sandbox}
+      TAX_AI_ZARINPAL_MERCHANT_ID: ${TAX_AI_ZARINPAL_MERCHANT_ID:-}
+      TAX_AI_ZARINPAL_CALLBACK_URL: ${TAX_AI_ZARINPAL_CALLBACK_URL:-http://localhost:8000/api/v1/portal/payments/zarinpal/callback}
+      TAX_AI_ZARINPAL_API_BASE_URL: ${TAX_AI_ZARINPAL_API_BASE_URL:-https://payment.zarinpal.com/pg/v4/payment}
+      TAX_AI_ZARINPAL_START_PAY_URL: ${TAX_AI_ZARINPAL_START_PAY_URL:-https://payment.zarinpal.com/pg/StartPay}
+
+      TAX_AI_MELIPAYAMAK_USERNAME: ${TAX_AI_MELIPAYAMAK_USERNAME:-}
+      TAX_AI_MELIPAYAMAK_API_KEY: ${TAX_AI_MELIPAYAMAK_API_KEY:-}
+      TAX_AI_MELIPAYAMAK_BODY_ID: ${TAX_AI_MELIPAYAMAK_BODY_ID:-504581}
+
+    command:
+      [
+        "/bin/sh",
+        "-c",
+        "alembic upgrade head && python -m app.bootstrap && exec uvicorn app.main:create_app --factory --host 0.0.0.0 --port 8000"
+      ]
+
+    ports:
+      - "8000:8000"
+
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+
+    volumes:
+      - documents_data:/app/storage
+
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "python",
+          "-c",
+          "import urllib.request; urllib.request.urlopen('http://localhost:8000/health', timeout=2)"
+        ]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+
+    restart: unless-stopped
+    stop_grace_period: 30s
+
+  worker:
+    build:
+      context: ./backend
+      target: runtime
+
+    command:
+      [
+        "celery",
+        "-A",
+        "app.workers.celery_app:celery_app",
+        "worker",
+        "--loglevel=INFO"
+      ]
+
+    environment:
+      TAX_AI_ENVIRONMENT: ${TAX_AI_ENVIRONMENT:-development}
+      TAX_AI_DATABASE_URL: postgresql+psycopg://tax_ai:${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in the root .env file}@db:5432/tax_ai
+      TAX_AI_JWT_SECRET: ${JWT_SECRET:?Set JWT_SECRET in the root .env file}
+
+      TAX_AI_CELERY_BROKER_URL: redis://redis:6379/0
+      TAX_AI_CELERY_RESULT_BACKEND: redis://redis:6379/1
+
+      TAX_AI_LOCAL_STORAGE_PATH: /app/storage
+
+      TAX_AI_AI_PROVIDER: gemini
+      TAX_AI_GEMINI_API_KEY: ${TAX_AI_GEMINI_API_KEY:-}
+      TAX_AI_GEMINI_BASE_URL: ${TAX_AI_GEMINI_BASE_URL:-https://api.avalai.ir/v1beta}
+      TAX_AI_GEMINI_GENERATION_MODEL: ${TAX_AI_GEMINI_GENERATION_MODEL:-gemini-2.5-flash}
+      TAX_AI_GEMINI_EMBEDDING_MODEL: ${TAX_AI_GEMINI_EMBEDDING_MODEL:-gemini-embedding-001}
+
+    depends_on:
+      api:
+        condition: service_healthy
+
+    volumes:
+      - documents_data:/app/storage
+
+    restart: unless-stopped
+    stop_grace_period: 60s
+
+  scheduler:
+    build:
+      context: ./backend
+      target: runtime
+
+    command:
+      [
+        "celery",
+        "-A",
+        "app.workers.celery_app:celery_app",
+        "beat",
+        "--loglevel=INFO",
+        "--schedule=/tmp/celerybeat-schedule"
+      ]
+
+    environment:
+      TAX_AI_ENVIRONMENT: ${TAX_AI_ENVIRONMENT:-development}
+      TAX_AI_DATABASE_URL: postgresql+psycopg://tax_ai:${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in the root .env file}@db:5432/tax_ai
+      TAX_AI_JWT_SECRET: ${JWT_SECRET:?Set JWT_SECRET in the root .env file}
+
+      TAX_AI_CELERY_BROKER_URL: redis://redis:6379/0
+      TAX_AI_CELERY_RESULT_BACKEND: redis://redis:6379/1
+
+    depends_on:
+      api:
+        condition: service_healthy
+
+    restart: unless-stopped
+
+  api-tests:
+    profiles: ["test"]
+
+    build:
+      context: ./backend
+      target: test
+
+    environment:
+      TAX_AI_ENVIRONMENT: test
+      TAX_AI_DATABASE_URL: "sqlite+pysqlite:///:memory:"
+      TAX_AI_JWT_SECRET: test-secret-that-is-at-least-32-characters-long
+      TAX_AI_AI_PROVIDER: disabled
+
+    command: ["pytest", "-q"]
+
+  web:
+    build:
+      context: ./frontend
+
+    environment:
+      BACKEND_URL: http://api:8000
+      NODE_ENV: production
+      AUTH_COOKIE_SECURE: ${AUTH_COOKIE_SECURE:-false}
+      NEXT_PUBLIC_SITE_URL: ${NEXT_PUBLIC_SITE_URL:-http://localhost:3000}
+
+    ports:
+      - "3000:3000"
+
+    depends_on:
+      api:
+        condition: service_healthy
+
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "wget",
+          "--quiet",
+          "--tries=1",
+          "--spider",
+          "http://127.0.0.1:3000/login"
+        ]
+      interval: 10s
+      timeout: 3s
+      retries: 8
+
+    restart: unless-stopped
+
+  redis:
+    image: public.ecr.aws/docker/library/redis:8-alpine
+
+    command: ["redis-server", "--appendonly", "yes"]
+
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+    volumes:
+      - redis_data:/data
+
+    restart: unless-stopped
+
+  backup:
+    image: public.ecr.aws/docker/library/postgres:17-alpine
+
+    environment:
+      PGHOST: db
+      PGDATABASE: tax_ai
+      PGUSER: tax_ai
+      PGPASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in the root .env file}
+      BACKUP_INTERVAL_SECONDS: ${BACKUP_INTERVAL_SECONDS:-86400}
+      BACKUP_RETENTION_DAYS: ${BACKUP_RETENTION_DAYS:-14}
+
+    command: ["/bin/sh", "/ops/backup-loop.sh"]
+
+    depends_on:
+      db:
+        condition: service_healthy
+
+    volumes:
+      - database_backups:/backups
+      - ./ops:/ops:ro
+
+    restart: unless-stopped
+
+volumes:
+  postgres_data:
+  redis_data:
+  documents_data:
+  database_backups:

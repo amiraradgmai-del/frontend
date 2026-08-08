@@ -1,0 +1,41 @@
+[build-system]
+requires = ["setuptools>=75"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "tax-ai-advisor-backend"
+version = "0.1.0"
+description = "Backend API for Tax AI Advisor"
+requires-python = ">=3.12"
+dependencies = [
+    "a2wsgi>=1.10,<2",
+    "alembic>=1.14,<2",
+    "boto3>=1.42,<2",
+    "celery[redis]>=5.6,<6",
+    "email-validator>=2.2,<3",
+    "fastapi>=0.115,<1",
+    "psycopg[binary]>=3.2,<4",
+    "pymupdf>=1.26,<2",
+    "openpyxl>=3.1,<4",
+    "python-docx>=1.2,<2",
+    "python-multipart>=0.0.22,<1",
+    "pwdlib[argon2]>=0.3,<1",
+    "pydantic-settings>=2.7,<3",
+    "pyjwt>=2.13,<3",
+    "sqlalchemy>=2.0,<3",
+    "uvicorn[standard]>=0.34,<1",
+]
+
+[project.optional-dependencies]
+dev = [
+    "httpx2>=2.5,<3",
+    "pytest>=8.3,<10",
+]
+
+[tool.setuptools.packages.find]
+include = ["app*"]
+
+[tool.pytest.ini_options]
+addopts = "-q"
+testpaths = ["tests"]
+pythonpath = ["."]

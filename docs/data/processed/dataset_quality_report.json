@@ -1,0 +1,30 @@
+{
+  "chunk_count": 387,
+  "lifecycle_status_counts": {
+    "repealed": 60,
+    "unknown": 327
+  },
+  "max_chunk_chars": 1399,
+  "notes": [
+    "No record is retrieval-eligible until an expert approves its source and validity dates.",
+    "Repeated article numbers are preserved because they can represent repealed and amended versions."
+  ],
+  "quality_flag_counts": {
+    "article_split_into_chunks": 135,
+    "duplicate_article_number": 16,
+    "missing_validity_dates": 387,
+    "non_official_source": 387,
+    "pending_expert_review": 387,
+    "repealed_marker": 60,
+    "very_short_text": 54
+  },
+  "requires_expert_review": true,
+  "retrieval_eligible_count": 0,
+  "schema_version": "2.0",
+  "source_article_count": 296,
+  "source_tier_counts": {
+    "secondary": 387
+  },
+  "unique_chunk_count": 387,
+  "unique_document_count": 1
+}
