@@ -52,6 +52,12 @@ const fieldLabels: Record<string, string> = {
   title: "عنوان",
   subject: "موضوع",
   description: "توضیحات",
+  province: "استان",
+  city: "شهر",
+  taxpayer_type: "نوع مؤدی",
+  professional_title: "عنوان تخصصی",
+  content: "متن مقاله",
+  slug: "نشانی مقاله",
 };
 
 function validationMessage(
@@ -76,6 +82,10 @@ function validationMessage(
   const label =
     fieldLabels[field] ?? "اطلاعات واردشده";
   const message = issue.msg ?? "";
+
+  if (issue.type === "missing" || message.includes("Field required")) {
+    return `${label} وارد نشده است.`;
+  }
 
   if (message.includes("valid email")) {
     return "فرمت ایمیل صحیح نیست.";

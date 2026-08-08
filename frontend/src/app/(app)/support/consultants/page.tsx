@@ -6,6 +6,7 @@ import { api } from "@/lib/api";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
+import { IranCitySelect } from "@/lib/iran-cities";
 
 type FormState = {
   consultant_type: "company" | "independent";
@@ -103,7 +104,7 @@ export function ConsultantCreateForm() {
       </Section>
 
       <Section title="خدمات و محل فعالیت">
-        <Field label="شهر"><Input value={form.city} onChange={(e) => set("city", e.target.value)} placeholder="تهران" /></Field>
+        <Field label="شهر"><IranCitySelect value={form.city} onChange={(value) => set("city", value)} /></Field>
         <Field label="هزینه جلسه (تومان)"><Input inputMode="numeric" value={form.consultation_price} onChange={(e) => set("consultation_price", e.target.value.replace(/\D/g, ""))} placeholder="مثلاً ۵۰۰۰۰۰" /></Field>
         <Field label="آدرس دفتر" wide><Input value={form.office_address} onChange={(e) => set("office_address", e.target.value)} placeholder="آدرس برای جلسات حضوری" /></Field>
         <Field label="لینک تصویر پروفایل" wide><Input dir="ltr" value={form.profile_image_url} onChange={(e) => set("profile_image_url", e.target.value)} placeholder="https://..." /></Field>

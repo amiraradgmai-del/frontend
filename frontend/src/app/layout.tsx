@@ -2,6 +2,7 @@ import type { Metadata } from "next";
 import { backendUrl } from "@/lib/backend";
 import { SiteThemeProvider } from "@/components/site-theme-provider";
 import "./vazirmatn.css";
+import "./font-collection.css";
 import "./globals.css";
 
 export async function generateMetadata(): Promise<Metadata> {

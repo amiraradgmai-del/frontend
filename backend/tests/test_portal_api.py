@@ -7,7 +7,7 @@ from app.core.config import Settings
 from app.db.base import Base
 from app.main import create_app
 from app.models.auth import Role, User
-from app.models.portal import DiscountCode, LawReferenceRecord, Payment, SubscriptionPlan, UserSubscription, WalletAccount
+from app.models.portal import DiscountCode, LawReferenceRecord, Payment, SubscriptionPlan, UserProfile, UserSubscription, WalletAccount
 from app.repositories.auth import seed_rbac
 
 PASSWORD = "SecurePassword123"
@@ -98,6 +98,53 @@ def test_customer_profile_checkout_documents_and_tickets(portal_client):
     search = client.get("/api/v1/legal/search?q=ماده 2", headers=headers)
     assert search.status_code == 200
     assert search.json()[0]["article_number"] == "2"
+
+
+def test_profile_access_requirements_and_automatic_support_answer(portal_client):
+    app, client = portal_client
+    headers = register(client, "guided-profile@example.com")
+
+    initial = client.get("/api/v1/portal/profile", headers=headers)
+    assert initial.status_code == 200
+    assert initial.json()["profile_complete"] is False
+    assert "شماره موبایل تأییدشده" in initial.json()["missing_required_fields"]
+
+    updated = client.patch(
+        "/api/v1/portal/profile",
+        headers=headers,
+        json={
+            "phone": "09121111111",
+            "province": "فارس",
+            "city": "شیراز",
+            "taxpayer_type": "individual",
+        },
+    )
+    assert updated.status_code == 200
+    assert updated.json()["profile_complete"] is False
+
+    with app.state.database.session() as session:
+        account = session.scalar(select(User).where(User.email == "guided-profile@example.com"))
+        profile = session.get(UserProfile, account.id)
+        profile.phone_verified = True
+        session.commit()
+
+    completed = client.get("/api/v1/portal/profile", headers=headers)
+    assert completed.json()["profile_complete"] is True
+    assert completed.json()["missing_required_fields"] == []
+
+    ticket = client.post(
+        "/api/v1/portal/tickets",
+        headers=headers,
+        json={
+            "subject": "چطور اشتراک تهیه کنم؟",
+            "category": "general",
+            "message": "برای خرید پلن و بسته اشتراک راهنمایی می‌خواهم.",
+        },
+    )
+    assert ticket.status_code == 201
+    assert ticket.json()["status"] == "answered"
+    assert len(ticket.json()["messages"]) == 2
+    assert ticket.json()["messages"][1]["is_staff"] is True
 
 
 def test_system_admin_can_manage_commerce_and_customer_data(portal_client):
@@ -211,11 +258,13 @@ def test_system_admin_can_version_site_configuration(portal_client):
     assert current.status_code == 200, current.text
     configuration = current.json()["draft"]
     configuration["theme"]["primary_color"] = "#0284c7"
+    configuration["theme"]["font_family"] = "Chakah_BNazanin"
     saved = client.patch("/api/v1/site/manage/draft", headers=headers, json={"configuration": configuration})
     assert saved.status_code == 200, saved.text
     published = client.post("/api/v1/site/manage/publish", headers=headers, json={"note": "test publish"})
     assert published.status_code == 200, published.text
     assert client.get("/api/v1/site/config").json()["configuration"]["theme"]["primary_color"] == "#0284c7"
+    assert client.get("/api/v1/site/config").json()["configuration"]["theme"]["font_family"] == "Chakah_BNazanin"
 
 
 def register_login(client: TestClient, email: str) -> dict[str, str]:

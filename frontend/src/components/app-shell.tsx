@@ -49,8 +49,6 @@ import { Badge } from "@/components/ui/badge";
 import { useSiteConfiguration } from "@/components/site-theme-provider";
 import { SupportLauncher } from "@/components/support-launcher";
 
-const PROFILE_COMPLETION_THRESHOLD = 85;
-
 const navigation = [
   {
     href: "/app/dashboard",
@@ -215,7 +213,7 @@ const managedNavigation = [
   },
   {
     href: "/management/content",
-    label: "صفحات و بلاگ",
+    label: "صفحات و مقاله‌ها",
     icon: Newspaper,
     permission: "site:manage",
   },
@@ -278,7 +276,7 @@ const supportNavigation = [
   },
   {
     href: "/management/content",
-    label: "صفحات و بلاگ",
+    label: "صفحات و مقاله‌ها",
     icon: Newspaper,
     permission: "site:manage",
   },
@@ -339,6 +337,8 @@ const tierLabels = {
 
 type ProfileStatus = {
   profile_score: number;
+  profile_complete: boolean;
+  missing_required_fields: string[];
 };
 
 export function AppShell({
@@ -416,9 +416,7 @@ export function AppShell({
 
         if (!active) return;
 
-        const profileCompleted =
-          profile.profile_score >=
-          PROFILE_COMPLETION_THRESHOLD;
+        const profileCompleted = profile.profile_complete;
 
         const isProfilePage =
           pathname === "/app/profile" ||
@@ -637,7 +635,7 @@ function UserShell({
               href="/blog"
               className="whitespace-nowrap px-2 text-xs font-bold text-slate-500 transition hover:text-blue-600"
             >
-              بلاگ
+              مقاله‌ها
             </Link>
             <Link
               href="/advisors"

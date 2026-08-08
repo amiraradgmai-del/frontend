@@ -7,7 +7,7 @@ class ThemeSettings(BaseModel):
     primary_color: str = "#2563eb"
     accent_color: str = "#f97316"
     background_color: str = "#fffaf5"
-    font_family: Literal["Vazirmatn", "Tahoma", "Arial", "serif"] = "Vazirmatn"
+    font_family: str = Field(default="Vazirmatn", min_length=1, max_length=80, pattern=r"^[A-Za-z0-9_-]+$")
     border_radius: int = Field(default=14, ge=6, le=28)
 
     @field_validator("primary_color", "accent_color", "background_color")

@@ -43,6 +43,13 @@ from app.services.zarinpal import ZarinpalError, ZarinpalGateway
 
 PROFILE_COMPLETION_THRESHOLD = 85
 
+PROFILE_REQUIRED_FIELDS = {
+    "phone": "شماره موبایل تأییدشده",
+    "province": "استان",
+    "city": "شهر",
+    "taxpayer_type": "نوع مؤدی",
+}
+
 
 router = APIRouter(prefix="/api/v1/portal", tags=["customer portal"])
 admin_router = APIRouter(prefix="/api/v1/admin", tags=["admin portal"])
@@ -170,6 +177,25 @@ PLAN_LIMITS = {
     "pro": {"documents": 20, "tickets": 20},
 }
 
+SUPPORT_FAQ = (
+    (
+        ("اشتراک", "پلن", "بسته"),
+        "برای تهیه اشتراک وارد بخش «اشتراک و پرداخت» شوید، بسته مناسب را انتخاب کنید و پرداخت را انجام دهید. اشتراک بعد از پرداخت موفق خودکار فعال می‌شود.",
+    ),
+    (
+        ("پرداخت ناموفق", "پرداخت نشد", "پول کم شد"),
+        "اگر مبلغ کسر شده ولی پرداخت ناموفق است، شماره پیگیری و زمان پرداخت را در همین گفتگو بفرستید. بازگشت وجه بانکی معمولاً تا ۷۲ ساعت کاری انجام می‌شود.",
+    ),
+    (
+        ("ارسال فایل", "آپلود فایل", "مدرک", "سند"),
+        "از بخش «اسناد من» فایل را بارگذاری کنید. برای ارسال مستقیم به پشتیبانی نیز می‌توانید از دکمه پیوست داخل همین گفتگو استفاده کنید.",
+    ),
+    (
+        ("رزرو", "نوبت", "مشاور"),
+        "از «لیست مشاوران» مشاور و زمان آزاد را انتخاب کنید. برای نهایی‌شدن رزرو باید یکی از اشتراک‌های فعال را داشته باشید.",
+    ),
+)
+
 
 def profile_for(session: Session, user: User) -> UserProfile:
     profile = session.get(UserProfile, user.id)
@@ -180,6 +206,7 @@ def profile_for(session: Session, user: User) -> UserProfile:
 
 
 def profile_data(profile: UserProfile, user: User | None = None) -> dict:
+    missing_required_fields = profile_missing_required_fields(profile)
     return {
         "email": user.email if user else "",
         "phone": profile.phone,
@@ -205,6 +232,8 @@ def profile_data(profile: UserProfile, user: User | None = None) -> dict:
         "profile_score": profile.profile_score,
         "reward_points": profile.reward_points,
         "referral_code": profile.referral_code,
+        "profile_complete": not missing_required_fields,
+        "missing_required_fields": missing_required_fields,
     }
 
 
@@ -235,17 +264,20 @@ def optional_iranian_phone(value: str) -> str:
 
 
 def refresh_profile_score(profile: UserProfile) -> None:
-    completed = sum(
-        (
-            bool(profile.phone and profile.phone_verified),
-            bool(profile.province),
-            bool(profile.city),
-            bool(profile.job_title),
-            bool(profile.taxpayer_type),
-            bool(profile.bio),
-        )
-    )
-    profile.profile_score = min(100, 10 + completed * 15)
+    refresh_profile_score(profile)
+
+
+def profile_missing_required_fields(profile: UserProfile) -> list[str]:
+    missing: list[str] = []
+    if not profile.phone or not profile.phone_verified:
+        missing.append(PROFILE_REQUIRED_FIELDS["phone"])
+    if not profile.province.strip():
+        missing.append(PROFILE_REQUIRED_FIELDS["province"])
+    if not profile.city.strip():
+        missing.append(PROFILE_REQUIRED_FIELDS["city"])
+    if not profile.taxpayer_type.strip():
+        missing.append(PROFILE_REQUIRED_FIELDS["taxpayer_type"])
+    return missing
 
 
 def aware_datetime(value: datetime) -> datetime:
@@ -268,6 +300,18 @@ def ticket_data(ticket: SupportTicket, session: Session) -> dict:
 
 def best_available_staff(session: Session) -> User | None:
     return session.scalar(select(User).join(User.roles).where(Role.name.in_(("admin", "support_admin", "system_admin")), User.is_active.is_(True)).order_by(User.last_seen_at.desc().nullslast(), User.updated_at.desc()))
+
+
+def support_faq_answer(subject: str, message: str) -> str | None:
+    normalized = f"{subject} {message}".replace("ي", "ی").replace("ك", "ک").lower()
+    best_answer: str | None = None
+    best_score = 0
+    for keywords, answer in SUPPORT_FAQ:
+        score = sum(keyword in normalized for keyword in keywords)
+        if score > best_score:
+            best_score = score
+            best_answer = answer
+    return best_answer if best_score else None
 
 
 @router.get("/overview")
@@ -1020,7 +1064,15 @@ def my_tickets(user: Annotated[User, Depends(get_current_user)], session: Annota
 @router.post("/tickets", status_code=201)
 def create_ticket(payload: TicketCreate,user: Annotated[User, Depends(get_current_user)],session: Annotated[Session, Depends(get_session)]):
     staff = best_available_staff(session)
-    ticket=SupportTicket(user_id=user.id,assigned_staff_id=staff.id if staff else None,subject=payload.subject,category=payload.category); session.add(ticket); session.flush(); session.add(TicketMessage(ticket_id=ticket.id,sender_user_id=user.id,message=payload.message,is_staff=False)); session.commit(); return ticket_data(session.scalar(select(SupportTicket).where(SupportTicket.id==ticket.id).options(selectinload(SupportTicket.messages))), session)
+    automatic_answer = support_faq_answer(payload.subject, payload.message)
+    ticket=SupportTicket(user_id=user.id,assigned_staff_id=staff.id if staff else None,subject=payload.subject,category=payload.category,status="answered" if automatic_answer else "open")
+    session.add(ticket)
+    session.flush()
+    session.add(TicketMessage(ticket_id=ticket.id,sender_user_id=user.id,message=payload.message,is_staff=False))
+    if automatic_answer:
+        session.add(TicketMessage(ticket_id=ticket.id,sender_user_id=staff.id if staff else user.id,message=automatic_answer,is_staff=True))
+    session.commit()
+    return ticket_data(session.scalar(select(SupportTicket).where(SupportTicket.id==ticket.id).options(selectinload(SupportTicket.messages))), session)
 
 
 @router.post("/tickets/{ticket_id}/messages")

@@ -7,7 +7,7 @@ type SiteConfiguration = {
       primary_color: string;
       accent_color: string;
       background_color: string;
-      font_family: "Vazirmatn" | "Tahoma" | "Arial" | "serif";
+      font_family: string;
       border_radius: number;
     };
     branding: { site_name: string; short_description: string; logo_url: string; support_email: string; support_phone: string; support_mobile: string; office_address: string; working_hours: string; legal_name: string; map_url: string; instagram_url: string; whatsapp_url: string; telegram_url: string };
@@ -30,7 +30,7 @@ export function applyTheme(theme: PublicConfig["configuration"]["theme"]) {
   root.style.setProperty("--accent", theme.accent_color);
   root.style.setProperty("--background", theme.background_color);
   root.style.setProperty("--radius", `${theme.border_radius / 16}rem`);
-  document.body.style.fontFamily = "Vazirmatn, Tahoma, Arial, sans-serif";
+  document.body.style.fontFamily = `"${theme.font_family}", Vazirmatn, Tahoma, Arial, sans-serif`;
 }
 
 export function SiteThemeProvider({ children }: { children: React.ReactNode }) {
