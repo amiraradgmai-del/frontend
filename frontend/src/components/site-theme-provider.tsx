@@ -1,5 +1,6 @@
 "use client";
 
+import Link from "next/link";
 import { createContext, useContext, useEffect, useState } from "react";
 
 type SiteConfiguration = {
@@ -49,9 +50,9 @@ export function useSiteConfiguration() {
   return useContext(SiteConfigurationContext);
 }
 
-export function SiteBrand({ management = false }: { management?: boolean }) {
+export function SiteBrand({ management = false, showDescription = false }: { management?: boolean; showDescription?: boolean }) {
   const { branding } = useSiteConfiguration();
-  return <><span className="flex size-10 shrink-0 items-center justify-center rounded-xl bg-primary text-primary-foreground" style={branding.logo_url ? { backgroundImage: `url(${branding.logo_url})`, backgroundPosition: "center", backgroundRepeat: "no-repeat", backgroundSize: "contain" } : undefined}>{branding.logo_url ? null : "ت"}</span><span>{management ? "مرکز مدیریت" : branding.site_name}</span></>;
+  return <Link href="/" className="flex items-center gap-3 font-black" aria-label="رفتن به صفحه اصلی"><span className="flex size-10 shrink-0 items-center justify-center rounded-xl bg-primary text-primary-foreground" style={branding.logo_url ? { backgroundImage: `url(${branding.logo_url})`, backgroundPosition: "center", backgroundRepeat: "no-repeat", backgroundSize: "contain" } : undefined}>{branding.logo_url ? null : "ت"}</span><span className="flex flex-col"><span>{management ? "مرکز مدیریت" : branding.site_name}</span>{showDescription && !management && <span className="mt-0.5 text-[11px] font-medium text-muted-foreground">{branding.short_description || "دستیار هوشمند مالیاتی"}</span>}</span></Link>;
 }
 
 export function ContactDetails() {

@@ -215,7 +215,7 @@ export default function LoginPage() {
       <section className="relative hidden overflow-hidden bg-gradient-to-br from-sky-500 via-blue-600 to-cyan-500 p-14 text-white lg:flex lg:flex-col lg:justify-between">
         <div className="absolute inset-0 bg-[radial-gradient(circle_at_20%_20%,rgba(255,255,255,.28),transparent_34%),radial-gradient(circle_at_80%_80%,rgba(251,191,36,.32),transparent_32%)]" />
 
-        <div className="relative flex items-center gap-3">
+        <Link href="/" className="relative flex items-center gap-3" aria-label="رفتن به صفحه اصلی">
           <div className="size-14 overflow-hidden rounded-2xl bg-white shadow-lg">
             <Image
               src="/brand/chakah-logo.png"
@@ -235,7 +235,7 @@ export default function LoginPage() {
               دستیار هوشمند مالیاتی
             </p>
           </div>
-        </div>
+        </Link>
 
         <div className="relative max-w-xl">
           <p className="mb-5 text-sm font-bold text-amber-200">

@@ -614,9 +614,8 @@ function UserShell({
               <Menu className="size-5" />
             </Button>
 
-            <button
-              type="button"
-              onClick={() => openProtectedPage("/app/dashboard")}
+            <Link
+              href="/"
               className="flex items-center gap-3 text-right"
             >
               <Logo branding={branding} />
@@ -626,7 +625,7 @@ function UserShell({
                   {branding.short_description}
                 </p>
               </div>
-            </button>
+            </Link>
           </div>
 
           <div className="flex items-center gap-2">
@@ -1218,7 +1217,9 @@ function Brand({
   compact?: boolean;
 }) {
   return (
-    <div
+    <Link
+      href="/"
+      aria-label="رفتن به صفحه اصلی"
       className={cn(
         "flex items-center gap-3",
         compact ? "" : "mb-8 px-2",
@@ -1235,7 +1236,7 @@ function Brand({
           {subtitle}
         </p>
       </div>
-    </div>
+    </Link>
   );
 }
 
