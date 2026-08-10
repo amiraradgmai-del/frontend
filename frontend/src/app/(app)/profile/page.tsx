@@ -74,6 +74,7 @@ export default function ProfilePage() {
   }
 
   function validateRequired(): string | null {
+    if (form.email.trim() && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(form.email.trim())) return "ایمیل واردشده معتبر نیست.";
     const phone = form.phone.replace(/[\s()-]/g, "");
     if (!/^09\d{9}$/.test(phone)) return "شماره موبایل را به‌صورت ۱۱ رقمی و با 09 وارد کنید.";
     if (!form.phone_verified) return "ابتدا شماره موبایل را با کد پیامکی تأیید کنید.";
@@ -85,6 +86,7 @@ export default function ProfilePage() {
 
   function payload() {
     return {
+      email: form.email.trim() || null,
       phone: form.phone,
       province: form.province,
       city: form.city,
@@ -161,7 +163,7 @@ export default function ProfilePage() {
         <CardHeader><CardTitle>اطلاعات حساب</CardTitle><CardDescription>فقط موارد ضروری با نشان «ضروری» مشخص شده‌اند؛ سایر فیلدها اختیاری هستند.</CardDescription></CardHeader>
         <CardContent>
           <form noValidate onSubmit={submit} className="grid gap-x-6 gap-y-5 md:grid-cols-2">
-            <Field label="ایمیل"><Input value={form.email} disabled dir="ltr" /></Field>
+            <Field label="ایمیل (اختیاری)"><Input type="email" value={form.email} onChange={(event) => update("email", event.target.value)} placeholder="name@example.com" autoComplete="email" dir="ltr" /></Field>
             <Field label="شماره موبایل" required><div className="flex gap-2"><Input value={form.phone} onChange={(event) => update("phone", event.target.value)} placeholder="09123456789" dir="ltr" /><Button type="button" variant="outline" onClick={() => void sendVerificationCode()} disabled={resendSeconds > 0 || form.phone_verified}>{form.phone_verified ? <><ShieldCheck /> تأییدشده</> : resendSeconds > 0 ? `${resendSeconds.toLocaleString("fa-IR")} ثانیه` : "ارسال کد"}</Button></div></Field>
             {verificationId && <div className="grid gap-2 rounded-2xl border border-blue-200 bg-blue-50 p-4 md:col-span-2 sm:grid-cols-[1fr_auto]"><Input inputMode="numeric" maxLength={6} value={verificationCode} onChange={(event) => setVerificationCode(event.target.value.replace(/\D/g, ""))} placeholder="کد شش‌رقمی" dir="ltr" /><Button type="button" onClick={() => void verifyPhone()}><KeyRound /> تأیید شماره</Button></div>}
             <Field label="نوع مؤدی" required><Select value={form.taxpayer_type} onChange={(value) => update("taxpayer_type", value)} options={[["", "انتخاب نوع مؤدی"], ["individual", "شخص حقیقی"], ["company", "شخص حقوقی"]]} /></Field>

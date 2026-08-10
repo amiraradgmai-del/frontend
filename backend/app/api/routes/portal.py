@@ -56,6 +56,7 @@ admin_router = APIRouter(prefix="/api/v1/admin", tags=["admin portal"])
 
 
 class ProfileUpdate(BaseModel):
+    email: EmailStr | None = None
     phone: str = Field(default="", max_length=20)
     alternate_phone: str = Field(default="", max_length=20)
     alternate_email: EmailStr | None = None
@@ -385,6 +386,16 @@ def update_profile(
 ):
     profile = profile_for(session, user)
     values = payload.model_dump(exclude_unset=True)
+
+    if "email" in values:
+        new_email = values.pop("email")
+        normalized_email = str(new_email).strip().lower() if new_email else None
+        if normalized_email != user.email:
+            duplicate = session.scalar(select(User.id).where(func.lower(User.email) == normalized_email, User.id != user.id)) if normalized_email else None
+            if duplicate:
+                raise HTTPException(409, "این ایمیل قبلاً برای حساب دیگری ثبت شده است.")
+            user.email = normalized_email
+            user.email_verified_at = None
 
     if "phone" in values:
         new_phone = values.pop("phone").strip()
