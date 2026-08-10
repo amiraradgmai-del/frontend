@@ -1,6 +1,7 @@
 "use client";
 
 import Link from "next/link";
+import { ArticleHeaderLinks } from "@/components/article-header-links";
 import { usePathname, useRouter } from "next/navigation";
 import { useEffect, useState } from "react";
 import {
@@ -678,6 +679,7 @@ function UserShell({
             </button>
           </div>
         </div>
+        <div className="mx-auto max-w-7xl px-4 pb-2 sm:px-6"><ArticleHeaderLinks compact /></div>
       </header>
 
       <div
