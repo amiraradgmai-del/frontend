@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { ArticleHeaderLinks } from "@/components/article-header-links";
+import { ArticleDropdown } from "@/components/article-dropdown";
 import { usePathname, useRouter } from "next/navigation";
 import { useEffect, useState } from "react";
 import {
@@ -341,17 +341,15 @@ type ProfileStatus = {
   missing_required_fields: string[];
 };
 
-export function AppShell({
-  children,
-}: {
-  children: React.ReactNode;
-}) {
+export function AppShell({ children }: { children: React.ReactNode }) {
   const pathname = usePathname();
   const router = useRouter();
 
   const [user, setUser] = useState<User | null>(null);
   const [menuOpen, setMenuOpen] = useState(false);
-  const [profileCompleted, setProfileCompleted] = useState<boolean | null>(null);
+  const [profileCompleted, setProfileCompleted] = useState<boolean | null>(
+    null,
+  );
 
   const { branding } = useSiteConfiguration();
 
@@ -364,11 +362,9 @@ export function AppShell({
 
         if (!active) return;
 
-        const isSystemAdmin =
-          currentUser.roles.includes("system_admin");
+        const isSystemAdmin = currentUser.roles.includes("system_admin");
 
-        const isAdmin =
-          currentUser.roles.includes("admin");
+        const isAdmin = currentUser.roles.includes("admin");
 
         const isExpert =
           currentUser.roles.includes("company_expert") ||
@@ -410,20 +406,16 @@ export function AppShell({
           return;
         }
 
-        const profile = await api<ProfileStatus>(
-          "api/v1/portal/profile",
-        );
+        const profile = await api<ProfileStatus>("api/v1/portal/profile");
 
         if (!active) return;
 
         const profileCompleted = profile.profile_complete;
 
         const isProfilePage =
-          pathname === "/app/profile" ||
-          pathname.startsWith("/app/profile/");
+          pathname === "/app/profile" || pathname.startsWith("/app/profile/");
         const isSupportPage =
-          pathname === "/app/tickets" ||
-          pathname.startsWith("/app/tickets/");
+          pathname === "/app/tickets" || pathname.startsWith("/app/tickets/");
 
         setProfileCompleted(profileCompleted);
         setUser(currentUser);
@@ -434,11 +426,7 @@ export function AppShell({
         }
 
         if (!pathname.startsWith("/app")) {
-          router.replace(
-            profileCompleted
-              ? "/app/dashboard"
-              : "/app/profile",
-          );
+          router.replace(profileCompleted ? "/app/dashboard" : "/app/profile");
         }
       } catch {
         if (active) {
@@ -516,35 +504,23 @@ export function AppShell({
   return (
     <div className="site-surface min-h-screen lg:grid lg:grid-cols-[280px_1fr]">
       <aside className="border-l border-white/25 bg-gradient-to-b from-cyan-500 via-blue-600 to-indigo-700 p-5 text-white shadow-2xl shadow-blue-950/20 lg:sticky lg:top-0 lg:flex lg:h-screen lg:flex-col">
-        <Brand
-          branding={branding}
-          subtitle="مرکز مدیریت و پاسخ‌گویی"
-        />
+        <Brand branding={branding} subtitle="مرکز مدیریت و پاسخ‌گویی" />
 
         <nav className="grid grid-cols-2 gap-2 lg:min-h-0 lg:flex-1 lg:grid-cols-1 lg:overflow-y-auto lg:[scrollbar-width:none] lg:[&::-webkit-scrollbar]:hidden">
           {visibleNavigation.map((item) => (
             <NavigationLink
               key={item.href}
               item={item}
-              active={isNavigationActive(
-                pathname,
-                item.href,
-              )}
+              active={isNavigationActive(pathname, item.href)}
             />
           ))}
         </nav>
 
-        <Account
-          user={user}
-          role={role}
-          logout={logout}
-        />
+        <Account user={user} role={role} logout={logout} />
       </aside>
 
       <main className="min-w-0 p-4 sm:p-7 lg:p-10">
-        <div className="mx-auto max-w-6xl">
-          {children}
-        </div>
+        <div className="mx-auto max-w-6xl">{children}</div>
       </main>
     </div>
   );
@@ -620,13 +596,12 @@ function UserShell({
               <Menu className="size-5" />
             </Button>
 
-            <Link
-              href="/"
-              className="flex items-center gap-3 text-right"
-            >
+            <Link href="/" className="flex items-center gap-3 text-right">
               <Logo branding={branding} />
               <div>
-                <p className="font-black text-slate-900">{branding.site_name}</p>
+                <p className="font-black text-slate-900">
+                  {branding.site_name}
+                </p>
                 <p className="hidden text-[11px] text-slate-500 sm:block">
                   {branding.short_description}
                 </p>
@@ -636,31 +611,36 @@ function UserShell({
 
           <div className="flex items-center gap-2">
             <Link
-              href="/blog"
-              className="whitespace-nowrap px-2 text-xs font-bold text-slate-500 transition hover:text-blue-600"
-            >
-              مقاله‌ها
-            </Link>
-            <Link
               href="/advisors"
-              className="whitespace-nowrap px-2 text-xs font-bold text-slate-500 transition hover:text-blue-600"
+              className="hidden whitespace-nowrap px-2 text-xs font-bold text-blue-700 transition hover:text-blue-600 lg:block"
             >
               لیست مشاوران
             </Link>
-            <a
-              href="#contact"
-              className="hidden px-2 text-xs font-bold text-slate-500 transition hover:text-blue-600 md:block"
+            <ArticleDropdown compact />
+            <Link
+              href="/laws"
+              className="hidden whitespace-nowrap px-2 text-xs font-bold text-slate-600 transition hover:text-blue-600 xl:block"
             >
-              ارتباط با ما
-            </a>
-
-            <button
-              type="button"
-              onClick={() => openProtectedPage("/app/chat")}
-              className="hidden rounded-xl bg-blue-600 px-4 py-2.5 text-sm font-bold text-white shadow-sm transition hover:bg-blue-700 sm:block"
+              قوانین مالیاتی
+            </Link>
+            <Link
+              href="/pricing"
+              className="hidden whitespace-nowrap px-2 text-xs font-bold text-slate-600 transition hover:text-blue-600 xl:block"
             >
-              پرسش جدید
-            </button>
+              تعرفه‌ها
+            </Link>
+            <Link
+              href="/about"
+              className="hidden whitespace-nowrap px-2 text-xs font-bold text-slate-600 transition hover:text-blue-600 xl:block"
+            >
+              درباره ما
+            </Link>
+            <Link
+              href="/contact"
+              className="hidden whitespace-nowrap px-2 text-xs font-bold text-slate-600 transition hover:text-blue-600 xl:block"
+            >
+              تماس
+            </Link>
 
             <button
               type="button"
@@ -684,7 +664,6 @@ function UserShell({
             </button>
           </div>
         </div>
-        <div className="mx-auto max-w-7xl px-4 pb-2 sm:px-6"><ArticleHeaderLinks compact /></div>
       </header>
 
       <div
@@ -904,11 +883,7 @@ function UserShell({
   );
 }
 
-function UserFooter({
-  branding,
-}: {
-  branding: Branding;
-}) {
+function UserFooter({ branding }: { branding: Branding }) {
   return (
     <footer
       id="contact"
@@ -922,12 +897,28 @@ function UserFooter({
             compact
           />
 
-          {(branding.office_address || branding.working_hours || branding.support_email) && (
+          {(branding.office_address ||
+            branding.working_hours ||
+            branding.support_email) && (
             <div className="mt-4 space-y-1 text-xs leading-6 text-slate-500">
-              {branding.legal_name && <p className="font-bold text-slate-700">{branding.legal_name}</p>}
+              {branding.legal_name && (
+                <p className="font-bold text-slate-700">
+                  {branding.legal_name}
+                </p>
+              )}
               {branding.office_address && <p>{branding.office_address}</p>}
-              {branding.working_hours && <p>ساعات پاسخ‌گویی: {branding.working_hours}</p>}
-              {branding.support_email && <a className="block text-blue-600" href={`mailto:${branding.support_email}`} dir="ltr">{branding.support_email}</a>}
+              {branding.working_hours && (
+                <p>ساعات پاسخ‌گویی: {branding.working_hours}</p>
+              )}
+              {branding.support_email && (
+                <a
+                  className="block text-blue-600"
+                  href={`mailto:${branding.support_email}`}
+                  dir="ltr"
+                >
+                  {branding.support_email}
+                </a>
+              )}
             </div>
           )}
 
@@ -942,9 +933,8 @@ function UserFooter({
 
             <div className="invisible absolute bottom-[calc(100%+10px)] right-0 z-20 w-72 translate-y-2 rounded-2xl border border-sky-100 bg-white p-4 opacity-0 shadow-2xl transition group-hover:visible group-hover:translate-y-0 group-hover:opacity-100 group-focus-within:visible group-focus-within:translate-y-0 group-focus-within:opacity-100">
               <p className="text-xs leading-6 text-slate-500">
-                چکاه برای ساده‌کردن امور مالیاتی،
-                دسترسی به ابزارها و ارتباط سریع با
-                کارشناسان ساخته شده است.
+                چکاه برای ساده‌کردن امور مالیاتی، دسترسی به ابزارها و ارتباط
+                سریع با کارشناسان ساخته شده است.
               </p>
 
               <div className="mt-4 flex gap-2">
@@ -954,9 +944,8 @@ function UserFooter({
           </div>
 
           <p className="mt-4 max-w-md text-sm leading-7 text-slate-500">
-            دسترسی ساده به ابزارهای مالیاتی، بانک
-            دانش، پیگیری پرونده و ارتباط با کارشناسان
-            در یک محیط امن و یکپارچه.
+            دسترسی ساده به ابزارهای مالیاتی، بانک دانش، پیگیری پرونده و ارتباط
+            با کارشناسان در یک محیط امن و یکپارچه.
           </p>
         </div>
 
@@ -964,17 +953,11 @@ function UserFooter({
           <p className="font-bold">دسترسی سریع</p>
 
           <div className="mt-4 grid gap-3 text-sm text-slate-500">
-            <Link href="/app/plans">
-              پلن‌های اشتراک
-            </Link>
+            <Link href="/app/plans">پلن‌های اشتراک</Link>
 
-            <Link href="/app/tickets">
-              مرکز پشتیبانی
-            </Link>
+            <Link href="/app/tickets">مرکز پشتیبانی</Link>
 
-            <Link href="/app/security">
-              امنیت حساب
-            </Link>
+            <Link href="/app/security">امنیت حساب</Link>
           </div>
         </div>
 
@@ -982,32 +965,21 @@ function UserFooter({
           <p className="font-bold">اعتماد و شفافیت</p>
 
           <div className="mt-4 grid grid-cols-3 gap-2">
-            <Trust
-              icon={ShieldCheck}
-              label="حفاظت داده"
-            />
+            <Trust icon={ShieldCheck} label="حفاظت داده" />
 
-            <Trust
-              icon={Scale}
-              label="پاسخ مستند"
-            />
+            <Trust icon={Scale} label="پاسخ مستند" />
 
-            <Trust
-              icon={ContactRound}
-              label="پشتیبانی"
-            />
+            <Trust icon={ContactRound} label="پشتیبانی" />
           </div>
 
           <p className="mt-3 text-[11px] leading-5 text-slate-400">
-            جایگاه نمایش مجوزها و نمادهای رسمی پس از
-            دریافت و تأیید نهایی.
+            جایگاه نمایش مجوزها و نمادهای رسمی پس از دریافت و تأیید نهایی.
           </p>
         </div>
       </div>
 
       <div className="border-t border-sky-50 px-5 py-5 text-center text-xs text-slate-400">
-        © {new Date().getFullYear()}{" "}
-        {branding.site_name}؛ همه حقوق محفوظ است.
+        © {new Date().getFullYear()} {branding.site_name}؛ همه حقوق محفوظ است.
       </div>
     </footer>
   );
@@ -1027,14 +999,8 @@ function SocialLink({
   return href ? (
     <a
       href={href}
-      target={
-        href.startsWith("http") ? "_blank" : undefined
-      }
-      rel={
-        href.startsWith("http")
-          ? "noreferrer"
-          : undefined
-      }
+      target={href.startsWith("http") ? "_blank" : undefined}
+      rel={href.startsWith("http") ? "noreferrer" : undefined}
       aria-label={label}
       title={label}
       className={`flex size-10 items-center justify-center rounded-xl border border-slate-100 text-slate-500 transition ${color}`}
@@ -1052,11 +1018,7 @@ function SocialLink({
   );
 }
 
-function ContactLinks({
-  branding,
-}: {
-  branding: Branding;
-}) {
+function ContactLinks({ branding }: { branding: Branding }) {
   return (
     <>
       <SocialLink
@@ -1094,11 +1056,7 @@ function ContactLinks({
   );
 }
 
-function ContactStrip({
-  branding,
-}: {
-  branding: Branding;
-}) {
+function ContactStrip({ branding }: { branding: Branding }) {
   return (
     <section
       id="contact-links"
@@ -1106,13 +1064,10 @@ function ContactStrip({
     >
       <div className="mx-auto flex max-w-7xl flex-col items-center justify-between gap-5 px-5 py-7 sm:flex-row">
         <div>
-          <p className="text-sm font-black text-slate-900">
-            ارتباط با ما
-          </p>
+          <p className="text-sm font-black text-slate-900">ارتباط با ما</p>
 
           <p className="mt-1 text-xs text-slate-500">
-            برای پرسش، پیگیری یا دریافت راهنمایی با
-            چکاه در ارتباط باشید.
+            برای پرسش، پیگیری یا دریافت راهنمایی با چکاه در ارتباط باشید.
           </p>
         </div>
 
@@ -1134,9 +1089,7 @@ function Trust({
   return (
     <div className="flex min-h-24 flex-col items-center justify-center rounded-2xl border border-sky-100 bg-sky-50/70 p-2 text-center">
       <Icon className="mb-2 size-6 text-blue-600" />
-      <span className="text-[10px] text-slate-600">
-        {label}
-      </span>
+      <span className="text-[10px] text-slate-600">{label}</span>
     </div>
   );
 }
@@ -1168,21 +1121,10 @@ function NavigationLink({
   );
 }
 
-function isNavigationActive(
-  pathname: string,
-  href: string,
-) {
-  const isPanelRoot = [
-    "/management",
-    "/support",
-    "/consultant",
-  ].includes(href);
+function isNavigationActive(pathname: string, href: string) {
+  const isPanelRoot = ["/management", "/support", "/consultant"].includes(href);
 
-  return (
-    pathname === href ||
-    (!isPanelRoot &&
-      pathname.startsWith(`${href}/`))
-  );
+  return pathname === href || (!isPanelRoot && pathname.startsWith(`${href}/`));
 }
 
 function Logo({
@@ -1227,21 +1169,14 @@ function Brand({
     <Link
       href="/"
       aria-label="رفتن به صفحه اصلی"
-      className={cn(
-        "flex items-center gap-3",
-        compact ? "" : "mb-8 px-2",
-      )}
+      className={cn("flex items-center gap-3", compact ? "" : "mb-8 px-2")}
     >
       <Logo branding={branding} />
 
       <div>
-        <p className="font-bold">
-          {branding.site_name}
-        </p>
+        <p className="font-bold">{branding.site_name}</p>
 
-        <p className="text-xs opacity-70">
-          {subtitle}
-        </p>
+        <p className="text-xs opacity-70">{subtitle}</p>
       </div>
     </Link>
   );
@@ -1270,10 +1205,7 @@ function Account({
             {user.full_name}
           </p>
 
-          <Badge
-            variant="secondary"
-            className="mt-1 text-[10px]"
-          >
+          <Badge variant="secondary" className="mt-1 text-[10px]">
             {roleLabels[role]}
           </Badge>
         </div>
