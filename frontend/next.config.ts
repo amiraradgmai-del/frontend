@@ -45,6 +45,12 @@ const nextConfig: NextConfig = {
   },
   async redirects() {
     return [
+      {
+        source: "/:path*",
+        has: [{ type: "host", value: "www.chekahtax.com" }],
+        destination: "https://chekahtax.com/:path*",
+        permanent: true,
+      },
       { source: "/dashboard", destination: "/app/dashboard", permanent: true },
       { source: "/chat", destination: "/app/chat", permanent: true },
       { source: "/history", destination: "/app/history", permanent: true },

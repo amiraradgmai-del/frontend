@@ -70,7 +70,7 @@ class ProfileUpdate(BaseModel):
     economic_code: str = Field(default="", max_length=20, pattern=r"^$|^[0-9]{8,20}$")
     website: str = Field(default="", max_length=300)
     taxpayer_type: str = Field(default="individual", max_length=30)
-    preferred_contact_method: Literal["phone", "sms", "email"] = "phone"
+    preferred_contact_method: Literal["phone", "sms", "email", "both"] = "phone"
     marketing_notifications: bool = False
     service_notifications: bool = True
     bio: str = Field(default="", max_length=1000)
@@ -264,7 +264,14 @@ def optional_iranian_phone(value: str) -> str:
 
 
 def refresh_profile_score(profile: UserProfile) -> None:
-    refresh_profile_score(profile)
+    profile.profile_score = min(
+        100,
+        10
+        + (25 if profile.phone and profile.phone_verified else 0)
+        + (25 if profile.province.strip() else 0)
+        + (20 if profile.city.strip() else 0)
+        + (20 if profile.taxpayer_type.strip() else 0),
+    )
 
 
 def profile_missing_required_fields(profile: UserProfile) -> list[str]:
@@ -377,19 +384,21 @@ def update_profile(
     session: Annotated[Session, Depends(get_session)],
 ):
     profile = profile_for(session, user)
-    values = payload.model_dump()
+    values = payload.model_dump(exclude_unset=True)
 
-    new_phone = values.pop("phone").strip()
-    if new_phone:
-        new_phone = normalize_iranian_phone(new_phone)
+    if "phone" in values:
+        new_phone = values.pop("phone").strip()
+        if new_phone:
+            new_phone = normalize_iranian_phone(new_phone)
+        if new_phone != profile.phone:
+            profile.phone = new_phone
+            profile.phone_verified = False
+            profile.phone_verified_at = None
 
-    if new_phone != profile.phone:
-        profile.phone = new_phone
-        profile.phone_verified = False
-        profile.phone_verified_at = None
-
-    values["alternate_phone"] = optional_iranian_phone(values["alternate_phone"])
-    values["alternate_email"] = str(values["alternate_email"] or "").strip().lower()
+    if "alternate_phone" in values:
+        values["alternate_phone"] = optional_iranian_phone(values["alternate_phone"])
+    if "alternate_email" in values:
+        values["alternate_email"] = str(values["alternate_email"] or "").strip().lower()
     for key, value in values.items():
         setattr(profile, key, value.strip() if isinstance(value, str) else value)
     refresh_profile_score(profile)
@@ -509,17 +518,7 @@ def verify_phone_code(
     profile.phone_verified_at = now
     challenge.used_at = now
 
-    completed = sum(
-        (
-            bool(profile.phone and profile.phone_verified),
-            bool(profile.province),
-            bool(profile.city),
-            bool(profile.job_title),
-            bool(profile.taxpayer_type),
-            bool(profile.bio),
-        )
-    )
-    profile.profile_score = min(100, 10 + completed * 15)
+    refresh_profile_score(profile)
 
     if (
         profile.profile_score >= PROFILE_COMPLETION_THRESHOLD

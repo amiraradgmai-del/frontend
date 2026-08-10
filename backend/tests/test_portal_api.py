@@ -8,6 +8,7 @@ from app.db.base import Base
 from app.main import create_app
 from app.models.auth import Role, User
 from app.models.portal import DiscountCode, LawReferenceRecord, Payment, SubscriptionPlan, UserProfile, UserSubscription, WalletAccount
+from app.models.site import ContentPage
 from app.repositories.auth import seed_rbac
 
 PASSWORD = "SecurePassword123"
@@ -50,10 +51,10 @@ def test_customer_profile_checkout_documents_and_tickets(portal_client):
 
     profile = client.patch("/api/v1/portal/profile", headers=headers, json={"phone": "09120000000", "province": "تهران", "city": "تهران", "company_name": "نمونه", "job_title": "مدیر", "taxpayer_type": "company", "bio": "پروفایل آزمایشی"})
     assert profile.status_code == 200, profile.text
-    assert profile.json()["profile_score"] == 85
-    assert profile.json()["reward_points"] == 500
+    assert profile.json()["profile_score"] == 75
+    assert profile.json()["reward_points"] == 0
     repeated_profile = client.patch("/api/v1/portal/profile", headers=headers, json={"phone": "09120000000", "province": "تهران", "city": "تهران", "company_name": "نمونه", "job_title": "مدیر", "taxpayer_type": "company", "bio": "پروفایل آزمایشی"})
-    assert repeated_profile.json()["reward_points"] == 500
+    assert repeated_profile.json()["reward_points"] == 0
 
     wallet_otp = client.post("/api/v1/portal/wallet/otp", headers=headers, json={"transaction_type": "charge", "amount": 250000})
     assert wallet_otp.status_code == 201, wallet_otp.text
@@ -145,6 +146,33 @@ def test_profile_access_requirements_and_automatic_support_answer(portal_client)
     assert ticket.json()["status"] == "answered"
     assert len(ticket.json()["messages"]) == 2
     assert ticket.json()["messages"][1]["is_staff"] is True
+
+
+def test_profile_partial_update_preserves_hidden_fields_and_accepts_both(portal_client):
+    app, client = portal_client
+    headers = register(client, "partial-profile@example.com")
+    first = client.patch(
+        "/api/v1/portal/profile",
+        headers=headers,
+        json={"company_name": "شرکت محفوظ", "preferred_contact_method": "both", "bio": "درباره کاربر"},
+    )
+    assert first.status_code == 200, first.text
+    second = client.patch("/api/v1/portal/profile", headers=headers, json={"province": "تهران"})
+    assert second.status_code == 200, second.text
+    assert second.json()["company_name"] == "شرکت محفوظ"
+    assert second.json()["preferred_contact_method"] == "both"
+    assert second.json()["bio"] == "درباره کاربر"
+
+
+def test_published_articles_are_returned_to_the_public_blog(portal_client):
+    app, client = portal_client
+    with app.state.database.session() as session:
+        session.add(ContentPage(slug="published-tax-guide", title="راهنمای مالیاتی منتشرشده", excerpt="خلاصه", content="متن کامل مقاله مالیاتی", page_type="post", category="مالیات", is_published=True, published_at=datetime.now(timezone.utc)))
+        session.add(ContentPage(slug="draft-tax-guide", title="پیش‌نویس", excerpt="خلاصه", content="متن کامل پیش‌نویس مالیاتی", page_type="post", category="مالیات", is_published=False))
+        session.commit()
+    response = client.get("/api/v1/site/content", params={"page_type": "post"})
+    assert response.status_code == 200, response.text
+    assert [item["slug"] for item in response.json()] == ["published-tax-guide"]
 
 
 def test_system_admin_can_manage_commerce_and_customer_data(portal_client):

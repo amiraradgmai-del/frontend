@@ -46,7 +46,10 @@ export default function ContentManagementPage() {
     }
   }, []);
 
-  useEffect(() => { void load(); }, [load]);
+  useEffect(() => {
+    const timer = window.setTimeout(() => void load(), 0);
+    return () => window.clearTimeout(timer);
+  }, [load]);
 
   function edit(item: Content) {
     setEditing(item.id);
@@ -141,7 +144,7 @@ export default function ContentManagementPage() {
         <Textarea className="min-h-60 sm:col-span-2" value={form.content} onChange={(event) => setForm({ ...form, content: event.target.value })} placeholder="متن کامل مقاله" />
         <Input value={form.seo_title} onChange={(event) => setForm({ ...form, seo_title: event.target.value })} placeholder="عنوان سئو (اختیاری)" />
         <Input value={form.seo_description} onChange={(event) => setForm({ ...form, seo_description: event.target.value })} placeholder="توضیحات سئو (اختیاری)" />
-        <label className="flex items-center gap-2 text-sm"><input type="checkbox" checked={form.is_published} onChange={(event) => setForm({ ...form, is_published: event.target.checked })} /> انتشار عمومی</label>
+        <label className="flex items-center gap-2 text-sm"><input type="checkbox" checked={form.is_published} onChange={(event) => setForm({ ...form, is_published: event.target.checked, scheduled_at: event.target.checked ? null : form.scheduled_at })} /> انتشار فوری و عمومی</label>
         <Button disabled={busy}><Plus />{editing ? "ذخیره ویرایش" : "افزودن مقاله"}</Button>
         {editing && <Button type="button" variant="outline" className="sm:col-span-2" onClick={() => { setEditing(null); setForm(empty); }}>انصراف از ویرایش</Button>}
       </form>

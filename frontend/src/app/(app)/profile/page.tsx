@@ -4,7 +4,6 @@ import { FormEvent, useEffect, useMemo, useState } from "react";
 import { CheckCircle2, Circle, Info, KeyRound, Save, ShieldCheck } from "lucide-react";
 
 import { FormFeedbackDialog } from "@/components/form-feedback-dialog";
-import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
@@ -18,16 +17,8 @@ type Profile = {
   phone_verified: boolean;
   province: string;
   city: string;
-  birth_date: string | null;
-  company_name: string;
-  job_title: string;
-  business_type: string;
-  website: string;
-  address: string;
   taxpayer_type: string;
-  preferred_contact_method: "phone" | "sms" | "email";
-  marketing_notifications: boolean;
-  service_notifications: boolean;
+  preferred_contact_method: "phone" | "sms" | "email" | "both";
   bio: string;
   profile_score: number;
   reward_points: number;
@@ -40,10 +31,9 @@ type Feedback = { title: string; message: string; kind: "error" | "success" | "i
 type VerificationRequest = { request_id: string; expires_in: number; resend_after: number };
 
 const empty: Profile = {
-  email: "", phone: "", phone_verified: false, province: "", city: "", birth_date: null,
-  company_name: "", job_title: "", business_type: "", website: "", address: "",
-  taxpayer_type: "", preferred_contact_method: "phone", marketing_notifications: false,
-  service_notifications: true, bio: "", profile_score: 10, reward_points: 0,
+  email: "", phone: "", phone_verified: false, province: "", city: "",
+  taxpayer_type: "", profile_score: 10, reward_points: 0,
+  preferred_contact_method: "phone", bio: "",
   referral_code: "", profile_complete: false, missing_required_fields: [],
 };
 
@@ -66,7 +56,10 @@ export default function ProfilePage() {
     }
   }
 
-  useEffect(() => { void loadProfile(); }, []);
+  useEffect(() => {
+    const timer = window.setTimeout(() => void loadProfile(), 0);
+    return () => window.clearTimeout(timer);
+  }, []);
   useEffect(() => {
     if (resendSeconds <= 0) return;
     const timer = window.setInterval(() => setResendSeconds((value) => Math.max(0, value - 1)), 1000);
@@ -95,16 +88,8 @@ export default function ProfilePage() {
       phone: form.phone,
       province: form.province,
       city: form.city,
-      birth_date: form.birth_date || null,
-      company_name: form.company_name,
-      job_title: form.job_title,
-      business_type: form.business_type,
-      website: form.website,
-      address: form.address,
       taxpayer_type: form.taxpayer_type,
       preferred_contact_method: form.preferred_contact_method,
-      marketing_notifications: form.marketing_notifications,
-      service_notifications: form.service_notifications,
       bio: form.bio,
     };
   }
@@ -180,17 +165,10 @@ export default function ProfilePage() {
             <Field label="شماره موبایل" required><div className="flex gap-2"><Input value={form.phone} onChange={(event) => update("phone", event.target.value)} placeholder="09123456789" dir="ltr" /><Button type="button" variant="outline" onClick={() => void sendVerificationCode()} disabled={resendSeconds > 0 || form.phone_verified}>{form.phone_verified ? <><ShieldCheck /> تأییدشده</> : resendSeconds > 0 ? `${resendSeconds.toLocaleString("fa-IR")} ثانیه` : "ارسال کد"}</Button></div></Field>
             {verificationId && <div className="grid gap-2 rounded-2xl border border-blue-200 bg-blue-50 p-4 md:col-span-2 sm:grid-cols-[1fr_auto]"><Input inputMode="numeric" maxLength={6} value={verificationCode} onChange={(event) => setVerificationCode(event.target.value.replace(/\D/g, ""))} placeholder="کد شش‌رقمی" dir="ltr" /><Button type="button" onClick={() => void verifyPhone()}><KeyRound /> تأیید شماره</Button></div>}
             <Field label="نوع مؤدی" required><Select value={form.taxpayer_type} onChange={(value) => update("taxpayer_type", value)} options={[["", "انتخاب نوع مؤدی"], ["individual", "شخص حقیقی"], ["company", "شخص حقوقی"]]} /></Field>
-            <Field label="روش ارتباط ترجیحی"><Select value={form.preferred_contact_method} onChange={(value) => update("preferred_contact_method", value as Profile["preferred_contact_method"])} options={[["phone", "تماس تلفنی"], ["sms", "پیامک"], ["email", "ایمیل"]]} /></Field>
+            <Field label="روش ارتباط ترجیحی"><Select value={form.preferred_contact_method} onChange={(value) => update("preferred_contact_method", value as Profile["preferred_contact_method"])} options={[["phone", "تماس تلفنی"], ["sms", "پیامک"], ["email", "ایمیل"], ["both", "هر دو (تماس و پیامک)"]]} /></Field>
             <Field label="استان" required><select value={form.province} onChange={(event) => update("province", event.target.value)} className="h-10 w-full rounded-lg border bg-white px-3 text-sm"><option value="">انتخاب استان</option>{IRAN_PROVINCES.map((province) => <option key={province} value={province}>{province}</option>)}</select></Field>
             <Field label="شهر" required><select value={form.city} onChange={(event) => update("city", event.target.value)} className="h-10 w-full rounded-lg border bg-white px-3 text-sm"><option value="">انتخاب شهر</option>{IRAN_CITIES.map((city) => <option key={city} value={city}>{city}</option>)}</select></Field>
-            <Field label="تاریخ تولد"><Input type="date" value={form.birth_date || ""} onChange={(event) => update("birth_date", event.target.value || null)} dir="ltr" /></Field>
-            <Field label="نام شرکت یا محل فعالیت"><Input value={form.company_name} onChange={(event) => update("company_name", event.target.value)} placeholder="اختیاری" /></Field>
-            <Field label="عنوان شغلی"><Input value={form.job_title} onChange={(event) => update("job_title", event.target.value)} placeholder="اختیاری" /></Field>
-            <Field label="نوع فعالیت"><Input value={form.business_type} onChange={(event) => update("business_type", event.target.value)} placeholder="اختیاری" /></Field>
-            <Field label="وب‌سایت"><Input value={form.website} onChange={(event) => update("website", event.target.value)} placeholder="https://example.com" dir="ltr" /></Field>
-            <Field label="نشانی"><Input value={form.address} onChange={(event) => update("address", event.target.value)} placeholder="اختیاری" /></Field>
             <Field label="درباره شما و نیازهای مالیاتی" wide><Textarea className="min-h-32" value={form.bio} onChange={(event) => update("bio", event.target.value)} placeholder="اختیاری؛ نیازها و حوزه فعالیت خود را کوتاه توضیح دهید" /></Field>
-            <div className="grid gap-3 rounded-xl border bg-slate-50 p-4 md:col-span-2 sm:grid-cols-2"><Toggle label="اعلان‌های خدمات و پرداخت" checked={form.service_notifications} onChange={(value) => update("service_notifications", value)} /><Toggle label="پیشنهادها و خبرهای سامانه" checked={form.marketing_notifications} onChange={(value) => update("marketing_notifications", value)} /></div>
             <Button type="submit" className="md:col-span-2" disabled={saving}><Save /> {saving ? "در حال ذخیره..." : "ذخیره و فعال‌سازی حساب"}</Button>
           </form>
         </CardContent>
@@ -201,15 +179,9 @@ export default function ProfilePage() {
 }
 
 function Field({ label, required = false, wide = false, children }: { label: string; required?: boolean; wide?: boolean; children: React.ReactNode }) {
-  return <label className={`space-y-2 text-sm ${wide ? "md:col-span-2" : ""}`}><span className="font-semibold">{label}{required ? <span className="mr-1 rounded-md bg-rose-50 px-1.5 py-0.5 text-[10px] font-bold text-rose-600">ضروری</span> : <span className="mr-1 text-[10px] font-normal text-slate-400">(اختیاری)</span>}</span>{children}</label>;
+  return <label className={`space-y-2 text-sm ${wide ? "md:col-span-2" : ""}`}><span className="font-semibold">{label}{required ? <span className="mr-1 rounded-md bg-rose-50 px-1.5 py-0.5 text-[10px] font-bold text-rose-600">ضروری</span> : null}</span>{children}</label>;
 }
 
 function Select({ value, onChange, options }: { value: string; onChange: (value: string) => void; options: [string, string][] }) {
   return <select value={value} onChange={(event) => onChange(event.target.value)} className="h-10 w-full rounded-lg border bg-white px-3 text-sm">{options.map(([key, label]) => <option key={key} value={key}>{label}</option>)}</select>;
 }
-
-function Toggle({ label, checked, onChange }: { label: string; checked: boolean; onChange: (value: boolean) => void }) {
-  return <label className="flex items-center justify-between gap-4 text-sm"><span>{label}</span><input type="checkbox" checked={checked} onChange={(event) => onChange(event.target.checked)} className="size-5 accent-primary" /></label>;
-}
-
-

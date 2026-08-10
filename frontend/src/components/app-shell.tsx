@@ -33,7 +33,6 @@ import {
   TicketCheck,
   UploadCloud,
   UserCog,
-  UserPlus,
   Users,
   WalletCards,
   Wrench,

@@ -1,7 +1,6 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
-import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { BadgeCheck, Building2, Check, Search, Trash2, UserRoundCheck, X } from "lucide-react";
 import { api, ApiError } from "@/lib/api";
