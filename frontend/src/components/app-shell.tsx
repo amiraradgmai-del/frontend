@@ -421,11 +421,14 @@ export function AppShell({
         const isProfilePage =
           pathname === "/app/profile" ||
           pathname.startsWith("/app/profile/");
+        const isSupportPage =
+          pathname === "/app/tickets" ||
+          pathname.startsWith("/app/tickets/");
 
         setProfileCompleted(profileCompleted);
         setUser(currentUser);
 
-        if (!profileCompleted && !isProfilePage) {
+        if (!profileCompleted && !isProfilePage && !isSupportPage) {
           router.replace("/app/profile");
           return;
         }
@@ -588,8 +591,10 @@ function UserShell({
   function openProtectedPage(href: string) {
     const isProfileRoute =
       href === "/app/profile" || href.startsWith("/app/profile/");
+    const isSupportRoute =
+      href === "/app/tickets" || href.startsWith("/app/tickets/");
 
-    if (!profileCompleted && !isProfileRoute) {
+    if (!profileCompleted && !isProfileRoute && !isSupportRoute) {
       setMenuOpen(false);
       setProfileNoticeOpen(true);
       return;

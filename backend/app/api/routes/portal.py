@@ -188,7 +188,7 @@ SUPPORT_FAQ = (
         "اگر مبلغ کسر شده ولی پرداخت ناموفق است، شماره پیگیری و زمان پرداخت را در همین گفتگو بفرستید. بازگشت وجه بانکی معمولاً تا ۷۲ ساعت کاری انجام می‌شود.",
     ),
     (
-        ("ارسال فایل", "آپلود فایل", "مدرک", "سند"),
+        ("ارسال فایل", "فایل مالیاتی", "آپلود فایل", "مدرک", "سند", "پیوست"),
         "از بخش «اسناد من» فایل را بارگذاری کنید. برای ارسال مستقیم به پشتیبانی نیز می‌توانید از دکمه پیوست داخل همین گفتگو استفاده کنید.",
     ),
     (
@@ -1090,8 +1090,15 @@ def reply_ticket(ticket_id:str,payload:MessageCreate,user:Annotated[User,Depends
     ticket=session.scalar(select(SupportTicket).where(SupportTicket.id==ticket_id,SupportTicket.user_id==user.id));
     if ticket is None: raise HTTPException(404,"تیکت پیدا نشد")
     if ticket.status=="closed": raise HTTPException(409,"تیکت بسته شده است")
-    if ticket.status!="answered": raise HTTPException(409,"تا زمان پاسخ پشتیبانی امکان ارسال پیام جدید وجود ندارد")
-    session.add(TicketMessage(ticket_id=ticket.id,sender_user_id=user.id,message=payload.message,is_staff=False)); ticket.status="open"; session.commit(); return {"ok":True}
+    automatic_answer = support_faq_answer(ticket.subject, payload.message)
+    session.add(TicketMessage(ticket_id=ticket.id,sender_user_id=user.id,message=payload.message,is_staff=False))
+    if automatic_answer:
+        session.add(TicketMessage(ticket_id=ticket.id,sender_user_id=ticket.assigned_staff_id or user.id,message=automatic_answer,is_staff=True))
+        ticket.status="answered"
+    else:
+        ticket.status="open"
+    session.commit()
+    return {"ok":True,"automatic_answer":bool(automatic_answer)}
 
 
 @router.post("/tickets/{ticket_id}/attachments")
