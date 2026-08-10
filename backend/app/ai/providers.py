@@ -2,12 +2,9 @@ from __future__ import annotations
 
 import json
 import hashlib
-import base64
-import http.client
 import logging
 import math
 import threading
-import time
 import urllib.error
 import urllib.request
 from collections import OrderedDict
@@ -22,8 +19,6 @@ logger = logging.getLogger(__name__)
 _response_cache: OrderedDict[str, dict] = OrderedDict()
 _response_cache_lock = threading.Lock()
 _response_cache_limit = 512
-_provider_blocked_until: dict[str, float] = {}
-_provider_block_lock = threading.Lock()
 
 
 class GeneratedAnswer(BaseModel):
@@ -59,17 +54,12 @@ class DisabledAIProvider:
     def embed_documents(self, texts: list[str]) -> None:
         return None
 
-    def extract_document_text(self, data: bytes, mime_type: str) -> None:
-        return None
-
 
 @dataclass(frozen=True)
 class GeminiProvider:
     api_key: str
     base_url: str
     generation_model: str
-    general_model: str
-    advanced_model: str
     embedding_model: str
     timeout_seconds: float
     embedding_dimensions: int
@@ -101,17 +91,12 @@ class GeminiProvider:
             "contents": [{"role": "user", "parts": [{"text": prompt}]}],
             "generationConfig": {
                 "temperature": 0.1,
-                "maxOutputTokens": 240,
+                "maxOutputTokens": 350,
                 "responseMimeType": "application/json",
                 "responseJsonSchema": GeneratedAnswer.model_json_schema(),
             },
         }
-        models = (
-            [self.advanced_model, self.generation_model, self.general_model]
-            if self._is_complex(question)
-            else [self.general_model, self.generation_model, self.advanced_model]
-        )
-        return self._generate(payload, models)
+        return self._generate(payload)
 
     def generate_general(self, question: str) -> str | None:
         prompt = (
@@ -129,36 +114,28 @@ class GeminiProvider:
             "contents": [{"role": "user", "parts": [{"text": prompt}]}],
             "generationConfig": {
                 "temperature": 0.2,
-                "maxOutputTokens": 200,
+                "maxOutputTokens": 250,
                 "responseMimeType": "application/json",
                 "responseJsonSchema": GeneratedAnswer.model_json_schema(),
             },
         }
-        return self._generate(payload, [self.general_model, self.generation_model, self.advanced_model])
+        return self._generate(payload)
 
-    def _generate(self, payload: dict, models: list[str]) -> str | None:
-        primary_models = list(dict.fromkeys(models))[:1]
-        for model in primary_models:
-            data = self._request(f"models/{model}:generateContent", payload)
-            if data.get("_provider_error_status") in {401, 402, 403, 429}:
-                break
+    def _generate(self, payload: dict) -> str | None:
+        data = self._request(
+            f"models/{self.generation_model}:generateContent", payload
+        )
+        try:
+            text = data["candidates"][0]["content"]["parts"][0]["text"]
             try:
-                text = data["candidates"][0]["content"]["parts"][0]["text"]
-                try:
-                    return GeneratedAnswer.model_validate_json(text).answer.strip()
-                except (ValidationError, json.JSONDecodeError):
-                    cleaned = str(text).strip()
-                    if cleaned:
-                        return cleaned[:6000]
-            except (KeyError, IndexError, TypeError):
-                logger.warning("gemini_invalid_generation_response", extra={"model": model})
+                return GeneratedAnswer.model_validate_json(text).answer.strip()
+            except (ValidationError, json.JSONDecodeError):
+                cleaned = str(text).strip()
+                if cleaned:
+                    return cleaned[:6000]
+        except (KeyError, IndexError, TypeError):
+            logger.warning("gemini_invalid_generation_response")
         return None
-
-    @staticmethod
-    def _is_complex(question: str) -> bool:
-        normalized = " ".join(question.split()).lower()
-        markers = ("تحلیل", "مقایسه", "ریسک", "اعتراض", "لایحه", "اظهارنامه", "جرائم", "سناریو", "راهکار", "دفاتر", "صورت مالی", "پرونده")
-        return len(normalized) >= 220 or sum(marker in normalized for marker in markers) >= 2
 
     def embed_query(self, text: str) -> list[float] | None:
         return self._embed_one(text, "RETRIEVAL_QUERY")
@@ -171,22 +148,6 @@ class GeminiProvider:
                 return None
             vectors.append(vector)
         return vectors
-
-    def extract_document_text(self, data: bytes, mime_type: str) -> str | None:
-        payload = {
-            "system_instruction": {"parts": [{"text": "متن سند را دقیق استخراج کن و هیچ اطلاعاتی حدس نزن."}]},
-            "contents": [{"role": "user", "parts": [
-                {"text": "تمام متن خوانای این سند را با حفظ ترتیب سطرها استخراج کن."},
-                {"inlineData": {"mimeType": mime_type, "data": base64.b64encode(data).decode("ascii")}},
-            ]}],
-            "generationConfig": {
-                "temperature": 0,
-                "maxOutputTokens": 3000,
-                "responseMimeType": "application/json",
-                "responseJsonSchema": GeneratedAnswer.model_json_schema(),
-            },
-        }
-        return self._generate(payload, [self.general_model, self.generation_model])
 
     def _embed_one(self, text: str, task_type: str) -> list[float] | None:
         payload = {
@@ -206,12 +167,6 @@ class GeminiProvider:
             return None
 
     def _request(self, endpoint: str, payload: dict) -> dict:
-        circuit_key = hashlib.sha256(
-            f"{self.base_url}\0{self.api_key}".encode("utf-8")
-        ).hexdigest()
-        with _provider_block_lock:
-            if time.monotonic() < _provider_blocked_until.get(circuit_key, 0.0):
-                return {"_provider_error_status": 429, "_circuit_open": True}
         encoded_payload = json.dumps(payload, ensure_ascii=False, sort_keys=True).encode("utf-8")
         cache_key = hashlib.sha256(endpoint.encode("utf-8") + b"\0" + encoded_payload).hexdigest()
         with _response_cache_lock:
@@ -239,20 +194,78 @@ class GeminiProvider:
                     while len(_response_cache) > _response_cache_limit:
                         _response_cache.popitem(last=False)
                 return result
-        except urllib.error.HTTPError as error:
-            if error.code in {401, 402, 403, 429}:
-                with _provider_block_lock:
-                    _provider_blocked_until[circuit_key] = time.monotonic() + (300 if error.code == 429 else 60)
-            logger.warning("gemini_request_failed", extra={"error_type": type(error).__name__, "status": error.code})
-            return {"_provider_error_status": error.code}
-        except (
-            urllib.error.URLError,
-            TimeoutError,
-            OSError,
-            http.client.HTTPException,
-            json.JSONDecodeError,
-        ) as error:
+        except (urllib.error.HTTPError, urllib.error.URLError, TimeoutError, json.JSONDecodeError) as error:
             logger.warning("gemini_request_failed", extra={"error_type": type(error).__name__})
+            return {}
+
+
+@dataclass(frozen=True)
+class AvalAIProvider:
+    api_key: str
+    base_url: str
+    generation_model: str
+    embedding_model: str
+    timeout_seconds: float
+    embedding_dimensions: int
+
+    @property
+    def model_name(self) -> str:
+        return self.embedding_model
+
+    def generate(self, question: str, sources: list[str]) -> str | None:
+        context = "\n\n".join(f"[منبع تأییدشده {index}]\n{source}" for index, source in enumerate(sources, 1))
+        return self._chat(
+            "فقط بر پایه منابع تأییدشده پاسخ کوتاه و دقیق فارسی بده. هیچ ماده، نرخ، مبلغ یا تاریخ را حدس نزن.",
+            f"پرسش: {question}\n\n{context}",
+        )
+
+    def generate_general(self, question: str) -> str | None:
+        return self._chat(
+            "دستیار آموزش عمومی مالیاتی ایران هستی. از ساختن ماده قانونی، نرخ، مبلغ یا مهلت خودداری کن.",
+            question,
+        )
+
+    def _chat(self, system: str, user: str) -> str | None:
+        data = self._request("chat/completions", {
+            "model": self.generation_model,
+            "messages": [{"role": "system", "content": system}, {"role": "user", "content": user}],
+            "temperature": 0.1,
+            "max_tokens": 500,
+        })
+        try:
+            answer = str(data["choices"][0]["message"]["content"]).strip()
+            return answer[:6000] or None
+        except (KeyError, IndexError, TypeError):
+            return None
+
+    def embed_query(self, text: str) -> list[float] | None:
+        vectors = self.embed_documents([text])
+        return vectors[0] if vectors else None
+
+    def embed_documents(self, texts: list[str]) -> list[list[float]] | None:
+        data = self._request("embeddings", {
+            "model": self.embedding_model,
+            "input": texts,
+            "dimensions": self.embedding_dimensions,
+        })
+        try:
+            rows = sorted(data["data"], key=lambda item: item["index"])
+            return [normalize_vector([float(value) for value in row["embedding"]]) for row in rows]
+        except (KeyError, TypeError, ValueError):
+            return None
+
+    def _request(self, endpoint: str, payload: dict) -> dict:
+        request = urllib.request.Request(
+            f"{self.base_url}/{endpoint}",
+            data=json.dumps(payload, ensure_ascii=False).encode("utf-8"),
+            headers={"Authorization": f"Bearer {self.api_key}", "Content-Type": "application/json"},
+            method="POST",
+        )
+        try:
+            with urllib.request.urlopen(request, timeout=self.timeout_seconds) as response:
+                return json.loads(response.read().decode("utf-8"))
+        except (urllib.error.HTTPError, urllib.error.URLError, TimeoutError, json.JSONDecodeError) as error:
+            logger.warning("avalai_request_failed", extra={"error_type": type(error).__name__})
             return {}
 
 
@@ -269,16 +282,23 @@ def cosine_similarity(left: list[float], right: list[float]) -> float:
     return sum(a * b for a, b in zip(left, right))
 
 
-def create_ai_provider(settings: Settings) -> DisabledAIProvider | GeminiProvider:
-    if settings.ai_provider != "gemini" or not settings.gemini_api_key:
-        return DisabledAIProvider()
-    return GeminiProvider(
+def create_ai_provider(settings: Settings) -> DisabledAIProvider | GeminiProvider | AvalAIProvider:
+    if settings.ai_provider == "avalai" and settings.avalai_api_key:
+        return AvalAIProvider(
+            api_key=settings.avalai_api_key,
+            base_url=settings.avalai_base_url,
+            generation_model=settings.avalai_generation_model,
+            embedding_model=settings.avalai_embedding_model,
+            timeout_seconds=settings.gemini_timeout_seconds,
+            embedding_dimensions=settings.embedding_dimensions,
+        )
+    if settings.ai_provider == "gemini" and settings.gemini_api_key:
+        return GeminiProvider(
         api_key=settings.gemini_api_key,
         base_url=settings.gemini_base_url,
         generation_model=settings.gemini_generation_model,
-        general_model=settings.gemini_general_model,
-        advanced_model=settings.gemini_advanced_model,
         embedding_model=settings.gemini_embedding_model,
         timeout_seconds=settings.gemini_timeout_seconds,
         embedding_dimensions=settings.embedding_dimensions,
-    )
+        )
+    return DisabledAIProvider()

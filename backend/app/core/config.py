@@ -221,6 +221,7 @@ class Settings(BaseSettings):
     ai_provider: Literal[
         "disabled",
         "gemini",
+        "avalai",
     ] = "gemini"
 
     gemini_api_key: str | None = None
@@ -230,12 +231,15 @@ class Settings(BaseSettings):
     )
 
     gemini_generation_model: str = "gemini-2.5-flash"
-    gemini_general_model: str = "gemini-2.5-flash-lite"
-    gemini_advanced_model: str = "gemini-3.5-flash"
     gemini_embedding_model: str = "gemini-embedding-001"
 
+    avalai_api_key: str | None = None
+    avalai_base_url: str = "https://api.avalai.ir/v1"
+    avalai_generation_model: str = "gpt-4o-mini"
+    avalai_embedding_model: str = "text-embedding-3-small"
+
     gemini_timeout_seconds: float = Field(
-        default=8.0,
+        default=20.0,
         ge=1.0,
         le=60.0,
     )
@@ -266,6 +270,7 @@ class Settings(BaseSettings):
 
     @field_validator(
         "gemini_api_key",
+        "avalai_api_key",
         mode="before",
     )
     @classmethod
@@ -277,13 +282,14 @@ class Settings(BaseSettings):
 
         if len(cleaned) < 20:
             raise ValueError(
-                "Gemini API key is too short"
+                "AI API key is too short"
             )
 
         return cleaned
 
     @field_validator(
         "gemini_base_url",
+        "avalai_base_url",
     )
     @classmethod
     def normalize_gemini_base_url(

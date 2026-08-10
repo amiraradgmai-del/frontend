@@ -15,6 +15,35 @@ from app.models.portal import LawReferenceRecord, LegalCategory, LegalExternalSo
 
 router = APIRouter(prefix="/api/v1/legal", tags=["legal center"])
 manage_router = APIRouter(prefix="/api/v1/legal/manage", tags=["legal management"])
+NON_LEGAL_TITLES = {"راهنمای کاربردی مالیاتی"}
+PERSIAN_DIGITS = str.maketrans("۰۱۲۳۴۵۶۷۸۹٠١٢٣٤٥٦٧٨٩", "01234567890123456789")
+
+
+def normalized_article_query(value: str) -> str | None:
+    normalized = value.translate(PERSIAN_DIGITS).strip()
+    match = re.fullmatch(r"(?:ماده(?:‌|\s)*(?:ی)?\s*)?(\d+)", normalized)
+    return match.group(1) if match else None
+
+
+def article_variants(value: str) -> set[str]:
+    persian = value.translate(str.maketrans("0123456789", "۰۱۲۳۴۵۶۷۸۹"))
+    arabic = value.translate(str.maketrans("0123456789", "٠١٢٣٤٥٦٧٨٩"))
+    return {value, persian, arabic}
+
+
+def canonical_law_name(value: str) -> str:
+    normalized = value.replace("\u200c", " ").translate(PERSIAN_DIGITS).strip()
+    return re.sub(r"\s+\d{4}/\d{1,2}/\d{1,2}$", "", normalized).strip()
+
+
+def unique_law_rows(rows) -> list[tuple[LawReferenceRecord, str | None]]:
+    selected: dict[tuple[str, str], tuple[LawReferenceRecord, str | None]] = {}
+    for item, category_title in rows:
+        key = (canonical_law_name(item.law_name), item.article_number.translate(PERSIAN_DIGITS).strip())
+        current = selected.get(key)
+        if current is None or len(item.official_text) > len(current[0].official_text):
+            selected[key] = (item, category_title)
+    return list(selected.values())
 
 
 class CategoryPayload(BaseModel):
@@ -94,23 +123,32 @@ def search_laws(
     limit: int = Query(default=20, ge=1, le=100),
 ):
     del user
-    query = select(LawReferenceRecord, LegalCategory.title).outerjoin(LegalCategory, LegalCategory.id == LawReferenceRecord.category_id).where(LawReferenceRecord.is_active.is_(True))
+    query = select(LawReferenceRecord, LegalCategory.title).outerjoin(LegalCategory, LegalCategory.id == LawReferenceRecord.category_id).where(
+        LawReferenceRecord.is_active.is_(True),
+        LawReferenceRecord.law_name.not_in(NON_LEGAL_TITLES),
+    )
     term = q.strip()
     if term:
-        conditions = [
-            LawReferenceRecord.law_name.ilike(f"%{term}%"),
-            LawReferenceRecord.chapter.ilike(f"%{term}%"),
-            LawReferenceRecord.official_text.ilike(f"%{term}%"),
-            LawReferenceRecord.keywords.ilike(f"%{term}%"),
-        ]
-        number_match = re.search(r"\d+", term)
-        if number_match:
-            conditions.append(LawReferenceRecord.article_number == number_match.group())
-        query = query.where(or_(*conditions))
+        exact_article = normalized_article_query(term)
+        if exact_article:
+            query = query.where(LawReferenceRecord.article_number.in_(article_variants(exact_article)))
+        else:
+            normalized_term = term.translate(PERSIAN_DIGITS)
+            conditions = [
+                LawReferenceRecord.law_name.ilike(f"%{term}%"),
+                LawReferenceRecord.chapter.ilike(f"%{term}%"),
+                LawReferenceRecord.official_text.ilike(f"%{term}%"),
+                LawReferenceRecord.keywords.ilike(f"%{term}%"),
+            ]
+            number_match = re.search(r"\d+", normalized_term)
+            if number_match:
+                conditions.append(LawReferenceRecord.article_number.in_(article_variants(number_match.group())))
+            query = query.where(or_(*conditions))
     if category_id:
         query = query.where(LawReferenceRecord.category_id == category_id)
-    rows = session.execute(query.order_by(LawReferenceRecord.law_name, LawReferenceRecord.article_number).offset(offset).limit(limit)).all()
-    return [law_data(item, category_title) for item, category_title in rows]
+    rows = session.execute(query.order_by(LawReferenceRecord.law_name, LawReferenceRecord.article_number)).all()
+    unique_rows = unique_law_rows(rows)
+    return [law_data(item, category_title) for item, category_title in unique_rows[offset:offset + limit]]
 
 
 @router.get("/records/{record_id}")
