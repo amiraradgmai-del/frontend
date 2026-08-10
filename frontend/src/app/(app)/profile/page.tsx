@@ -9,7 +9,10 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import { api, ApiError } from "@/lib/api";
-import { IRAN_CITIES, IRAN_PROVINCES } from "@/lib/iran-cities";
+
+const IranCity = require("iran-city");
+
+type LocationItem = { id: number; name: string; province_id?: number };
 
 type Profile = {
   email: string;
@@ -45,6 +48,9 @@ export default function ProfilePage() {
   const [verificationId, setVerificationId] = useState("");
   const [verificationCode, setVerificationCode] = useState("");
   const [resendSeconds, setResendSeconds] = useState(0);
+  const provinces = useMemo(() => IranCity.allProvinces() as LocationItem[], []);
+  const selectedProvince = useMemo(() => provinces.find((item) => item.name === form.province.trim()), [form.province, provinces]);
+  const cities = useMemo(() => selectedProvince ? IranCity.citiesOfProvince(selectedProvince.id) as LocationItem[] : [], [selectedProvince]);
 
   async function loadProfile() {
     try {
@@ -71,6 +77,10 @@ export default function ProfilePage() {
 
   function update<K extends keyof Profile>(key: K, value: Profile[K]) {
     setForm((current) => ({ ...current, [key]: value }));
+  }
+
+  function updateProvince(value: string) {
+    setForm((current) => ({ ...current, province: value, city: "" }));
   }
 
   function validateRequired(): string | null {
@@ -168,8 +178,8 @@ export default function ProfilePage() {
             {verificationId && <div className="grid gap-2 rounded-2xl border border-blue-200 bg-blue-50 p-4 md:col-span-2 sm:grid-cols-[1fr_auto]"><Input inputMode="numeric" maxLength={6} value={verificationCode} onChange={(event) => setVerificationCode(event.target.value.replace(/\D/g, ""))} placeholder="کد شش‌رقمی" dir="ltr" /><Button type="button" onClick={() => void verifyPhone()}><KeyRound /> تأیید شماره</Button></div>}
             <Field label="نوع مؤدی" required><Select value={form.taxpayer_type} onChange={(value) => update("taxpayer_type", value)} options={[["", "انتخاب نوع مؤدی"], ["individual", "شخص حقیقی"], ["company", "شخص حقوقی"]]} /></Field>
             <Field label="روش ارتباط ترجیحی"><Select value={form.preferred_contact_method} onChange={(value) => update("preferred_contact_method", value as Profile["preferred_contact_method"])} options={[["phone", "تماس تلفنی"], ["sms", "پیامک"], ["email", "ایمیل"], ["both", "هر دو (تماس و پیامک)"]]} /></Field>
-            <Field label="استان" required><select value={form.province} onChange={(event) => update("province", event.target.value)} className="h-10 w-full rounded-lg border bg-white px-3 text-sm"><option value="">انتخاب استان</option>{IRAN_PROVINCES.map((province) => <option key={province} value={province}>{province}</option>)}</select></Field>
-            <Field label="شهر" required><select value={form.city} onChange={(event) => update("city", event.target.value)} className="h-10 w-full rounded-lg border bg-white px-3 text-sm"><option value="">انتخاب شهر</option>{IRAN_CITIES.map((city) => <option key={city} value={city}>{city}</option>)}</select></Field>
+            <Field label="استان" required><Input list="iran-provinces" value={form.province} onChange={(event) => updateProvince(event.target.value)} placeholder="استان را تایپ یا انتخاب کنید" autoComplete="off" /><datalist id="iran-provinces">{provinces.map((province) => <option key={province.id} value={province.name} />)}</datalist></Field>
+            <Field label="شهر" required><Input list="iran-cities" value={form.city} onChange={(event) => update("city", event.target.value)} placeholder={selectedProvince ? "شهر را تایپ یا انتخاب کنید" : "ابتدا استان را انتخاب کنید"} disabled={!selectedProvince} autoComplete="off" /><datalist id="iran-cities">{cities.map((city) => <option key={city.id} value={city.name} />)}</datalist></Field>
             <Field label="درباره شما و نیازهای مالیاتی" wide><Textarea className="min-h-32" value={form.bio} onChange={(event) => update("bio", event.target.value)} placeholder="اختیاری؛ نیازها و حوزه فعالیت خود را کوتاه توضیح دهید" /></Field>
             <Button type="submit" className="md:col-span-2" disabled={saving}><Save /> {saving ? "در حال ذخیره..." : "ذخیره و فعال‌سازی حساب"}</Button>
           </form>
@@ -181,7 +191,7 @@ export default function ProfilePage() {
 }
 
 function Field({ label, required = false, wide = false, children }: { label: string; required?: boolean; wide?: boolean; children: React.ReactNode }) {
-  return <label className={`space-y-2 text-sm ${wide ? "md:col-span-2" : ""}`}><span className="font-semibold">{label}{required ? <span className="mr-1 rounded-md bg-rose-50 px-1.5 py-0.5 text-[10px] font-bold text-rose-600">ضروری</span> : null}</span>{children}</label>;
+  return <label className={`space-y-2 text-sm ${wide ? "md:col-span-2" : ""}`}><span className="inline-flex items-center gap-2 font-semibold">{label}{required ? <span className="rounded-md bg-rose-50 px-1.5 py-0.5 text-[10px] font-bold text-rose-600">ضروری</span> : null}</span>{children}</label>;
 }
 
 function Select({ value, onChange, options }: { value: string; onChange: (value: string) => void; options: [string, string][] }) {
