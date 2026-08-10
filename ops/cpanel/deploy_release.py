@@ -45,6 +45,10 @@ def main() -> None:
 
     active_web = HOME / "chakah-web"
     backup_web = backup / "chakah-web"
+    # Passenger can leave orphaned Next workers after repeated releases. Stop
+    # only this account's stale web workers before swapping the application.
+    subprocess.run(["pkill", "-u", "magnbxua", "-f", "next-server"], check=False)
+    time.sleep(2)
     active_web.rename(backup_web)
     (work / "chakah-web-next").rename(active_web)
 
