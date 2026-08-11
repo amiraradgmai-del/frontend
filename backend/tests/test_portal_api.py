@@ -85,7 +85,21 @@ def test_customer_profile_checkout_documents_and_tickets(portal_client):
     assert ticket.status_code == 201, ticket.text
     assert ticket.json()["messages"][0]["is_staff"] is False
     blocked_reply = client.post(f"/api/v1/portal/tickets/{ticket.json()['id']}/messages", headers=headers, json={"message": "پیام دوم پیش از پاسخ مدیر"})
-    assert blocked_reply.status_code == 409
+    assert blocked_reply.status_code == 200
+    assert blocked_reply.json()["automatic_answer"] is False
+    attachment = client.post(
+        f"/api/v1/portal/tickets/{ticket.json()['id']}/attachments",
+        headers=headers,
+        files={"file": ("receipt.txt", b"payment receipt", "text/plain")},
+    )
+    assert attachment.status_code == 200, attachment.text
+    refreshed_ticket = client.get("/api/v1/portal/tickets", headers=headers).json()[0]
+    attachment_message = refreshed_ticket["messages"][-1]
+    assert attachment_message["attachment_name"] == "receipt.txt"
+    download_path = attachment_message["attachment_url"].removeprefix("/api/backend/api/v1")
+    downloaded = client.get(f"/api/v1{download_path}", headers=headers)
+    assert downloaded.status_code == 200
+    assert downloaded.content == b"payment receipt"
 
     reminder = client.post("/api/v1/tools/reminders", headers=headers, json={"title": "مهلت اظهارنامه", "description": "یادآوری آزمون", "due_date": "2027-01-01", "category": "declaration", "notify_days_before": 7})
     assert reminder.status_code == 201, reminder.text

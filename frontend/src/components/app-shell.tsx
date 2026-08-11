@@ -132,6 +132,15 @@ const navigation = [
   },
 ];
 
+const publicNavigation = [
+  { href: "/advisors", label: "لیست مشاوران", icon: Users },
+  { href: "/blog", label: "مقاله‌ها", icon: Newspaper },
+  { href: "/laws", label: "قوانین مالیاتی", icon: Scale },
+  { href: "/pricing", label: "تعرفه‌ها", icon: Tags },
+  { href: "/about", label: "درباره ما", icon: ContactRound },
+  { href: "/contact", label: "تماس", icon: Phone },
+];
+
 const managedNavigation = [
   {
     href: "/management",
@@ -779,6 +788,23 @@ function UserShell({
                   </button>
                 );
               })}
+            </div>
+
+            <p className="mb-3 mt-6 px-2 text-[11px] font-bold text-slate-400">
+              لینک‌های سایت
+            </p>
+            <div className="grid grid-cols-2 gap-2">
+              {publicNavigation.map((item) => (
+                <Link
+                  key={item.href}
+                  href={item.href}
+                  onClick={() => setMenuOpen(false)}
+                  className="flex min-h-11 items-center gap-2 rounded-xl border border-sky-100 bg-sky-50/60 px-3 py-2 text-xs font-bold text-slate-600 transition hover:border-blue-200 hover:bg-blue-50 hover:text-blue-700"
+                >
+                  <item.icon className="size-4 shrink-0" />
+                  <span>{item.label}</span>
+                </Link>
+              ))}
             </div>
           </nav>
 
