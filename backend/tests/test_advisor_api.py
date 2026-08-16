@@ -388,16 +388,29 @@ def test_casual_chat_and_limited_general_knowledge_fallback(client_with_document
         headers=headers,
         json={"question": "مالیات مستقیم به زبان ساده چیست؟"},
     ).json()
-    assert general["answer_basis"] == "general_knowledge"
-    assert general["confidence"] == 0.2
-    assert general["source_notice"]
-    assert provider.general_calls == 1
+    assert general["answer_basis"] == "insufficient_source"
+    assert general["confidence"] == 0
+    assert provider.general_calls == 0
 
     sensitive = client.post(
         "/api/v1/chat/query",
         headers=headers,
         json={"question": "نرخ مالیات مستقیم امسال چند درصد است؟"},
     ).json()
-    assert sensitive["answer_basis"] == "general_knowledge"
-    assert sensitive["source_notice"]
-    assert provider.general_calls == 2
+    assert sensitive["answer_basis"] == "insufficient_source"
+    assert sensitive["clarifying_questions"]
+    assert sensitive["confidence"] == 0
+    assert provider.general_calls == 0
+
+
+def test_concise_law_fallback_skips_excerpt_metadata():
+    source = (
+        "قانون مالیات‌های مستقیم\nفصل مالیات بر ارث\nماده 17\n"
+        "اموال و دارایی‌هایی که در نتیجه فوت شخص منتقل می‌شود مشمول احکام این فصل است. "
+        "وراث باید تکالیف مقرر در قانون را در مهلت مربوط انجام دهند."
+    )
+
+    answer = AdvisorService._concise_sources([source])
+
+    assert "اموال و دارایی‌ها" in answer
+    assert not answer.startswith("فصل مالیات بر ارث")
