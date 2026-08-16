@@ -9,8 +9,7 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import { api, ApiError } from "@/lib/api";
-
-const IranCity = require("iran-city");
+import * as IranCity from "iran-city";
 
 type LocationItem = { id: number; name: string; province_id?: number };
 

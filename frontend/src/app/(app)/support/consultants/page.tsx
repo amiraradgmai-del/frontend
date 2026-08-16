@@ -26,7 +26,7 @@ const initialForm: FormState = {
   is_online: true, offers_in_person: false, is_available: true,
 };
 
-function ConsultantCreateForm() {
+export function ConsultantCreateForm() {
   const [form, setForm] = useState(initialForm);
   const [showPassword, setShowPassword] = useState(false);
   const [saving, setSaving] = useState(false);
