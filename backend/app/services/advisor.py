@@ -441,6 +441,8 @@ class AdvisorService:
         elif selected:
             excerpts = [self._source_excerpt(hit.chunk) for hit in selected]
             generated = self.provider.generate(ai_question, excerpts)
+            if not self._provider_citations_are_valid(generated, len(excerpts)):
+                generated = None
             if not self._answer_is_usable(generated, excerpts, question):
                 generated = None
             answer = generated or self._general_fallback(question) or (
@@ -474,6 +476,7 @@ class AdvisorService:
                 if len(diverse_law_hits) == 5:
                     break
             law_hits = diverse_law_hits
+            conflicting_sources = self._has_conflicting_law_sources(law_hits)
             excerpts = [
                 (
                     f"{hit.record.law_name}\n{hit.record.chapter}\nماده {hit.record.article_number}\n"
@@ -484,7 +487,9 @@ class AdvisorService:
                 for hit in law_hits
             ]
             direct_answer = self._curated_answer(law_hits[0])
-            generated = direct_answer or self.provider.generate(ai_question, excerpts)
+            generated = None if conflicting_sources else (direct_answer or self.provider.generate(ai_question, excerpts))
+            if direct_answer is None and not self._provider_citations_are_valid(generated, len(excerpts)):
+                generated = None
             if not self._answer_is_usable(generated, excerpts, question):
                 generated = None
             answer = generated or self._general_fallback(question) or self._curated_sources_fallback(law_hits)
@@ -496,6 +501,10 @@ class AdvisorService:
                 min(1.0, sum(hit.score for hit in law_hits) / len(law_hits)), 2
             )
             answer_basis = "dataset"
+            if conflicting_sources:
+                answer = "منابع معتبر بازیابی‌شده درباره این موضوع با یکدیگر تعارض دارند؛ پاسخ قطعی ارائه نمی‌شود و بررسی کارشناس مالیاتی لازم است."
+                confidence = min(confidence, 0.25)
+                source_notice = "تعارض منبع شناسایی شد؛ وضعیت اعتبار و تاریخ منابع باید بررسی شود."
             law_citations = [
                 CitationResponse(
                     chunk_id=hit.record.id,
@@ -660,6 +669,34 @@ class AdvisorService:
         if precise_claim and precise_claim.group(0) not in source_text:
             return False
         return True
+
+    def _provider_citations_are_valid(self, answer: str | None, source_count: int) -> bool:
+        if type(self.provider).__name__ != "AvalAIProvider":
+            return True
+        if not answer:
+            return False
+        references = [int(value) for value in re.findall(r"\[S(\d+)\]", answer)]
+        if not references or any(value < 1 or value > source_count for value in references):
+            return False
+        factual_sentences = [
+            sentence.strip()
+            for sentence in re.split(r"[.!?ØŸ\n]+", answer)
+            if len(sentence.strip()) >= 24
+        ]
+        return bool(factual_sentences) and all(re.search(r"\[S\d+\]", sentence) for sentence in factual_sentences)
+
+    @staticmethod
+    def _has_conflicting_law_sources(hits: list[LawHit]) -> bool:
+        official: dict[tuple[str, str], set[str]] = {}
+        for hit in hits:
+            record = hit.record
+            if record.source_type != "official" or record.legal_status != "valid":
+                continue
+            key = (normalize_persian(record.law_name).strip(), record.article_number.strip())
+            text = re.sub(r"\s+", " ", normalize_persian(record.official_text)).strip()
+            if key[1] and text:
+                official.setdefault(key, set()).add(text)
+        return any(len(texts) > 1 for texts in official.values())
 
     @staticmethod
     def _curated_answer(hit: LawHit) -> str | None:

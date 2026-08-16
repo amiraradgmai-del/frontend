@@ -219,6 +219,23 @@ def test_legal_intent_routing(question, law, article, minimum):
     assert AdvisorService._legal_intent_boost(question, law, article) >= minimum
 
 
+def test_avalai_grounded_answer_requires_valid_sentence_citations(client_with_document):
+    app, _client = client_with_document
+    with app.state.database.session() as session:
+        service = AdvisorService(session)
+        service.provider = type("AvalAIProvider", (), {})()
+        assert service._provider_citations_are_valid("حکم مستند و قابل بررسی است [S1]", 1)
+        assert not service._provider_citations_are_valid("حکم بدون منبع است", 1)
+        assert not service._provider_citations_are_valid("حکم با منبع جعلی است [S3]", 1)
+
+
+def test_conflicting_valid_official_sources_are_detected():
+    first = LawReferenceRecord(id="a", source_id="official-a", law_name="قانون آزمون", chapter="", article_number="10", official_text="متن اول", source_url="", keywords="", source_type="official", legal_status="valid")
+    second = LawReferenceRecord(id="b", source_id="official-b", law_name="قانون آزمون", chapter="", article_number="10", official_text="متن متفاوت", source_url="", keywords="", source_type="official", legal_status="valid")
+    from app.services.advisor import LawHit
+    assert AdvisorService._has_conflicting_law_sources([LawHit(first, 1), LawHit(second, 1)])
+
+
 def test_complex_question_uses_multi_topic_fallback(client_with_document):
     _app, client = client_with_document
     headers = auth(client, "complex@example.com")
