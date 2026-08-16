@@ -36,7 +36,7 @@ def wait_for_port(port: int, timeout: int = 25) -> None:
 
 
 def main() -> None:
-    stamp = datetime.now(timezone.utc).strftime("%Y%m%d-%H%M%S")
+    stamp = datetime.now(timezone.utc).strftime("%Y%m%d-%H%M%S-%f")
     work = HOME / f".release-{stamp}"
     backup = HOME / "backups" / f"chakah-{stamp}"
     work.mkdir()
