@@ -85,6 +85,12 @@ class LawRecordSnapshot:
     official_text: str
     keywords: str
     source_url: str
+    source_type: str
+    legal_status: str
+    fiscal_year: int | None
+    effective_date: date | None
+    expiry_date: date | None
+    last_verified_at: datetime | None
 
 
 _law_index_cache: dict[str, tuple[float, list[tuple[LawRecordSnapshot, set[str], set[str], str]]]] = {}
@@ -164,11 +170,20 @@ class AdvisorService:
             combined.append(SearchHit(chunk, min(score, 1.0)))
         return sorted(combined, key=lambda hit: hit.score, reverse=True)[:limit]
 
-    def search_law_records(self, question: str, limit: int = 8) -> list[LawHit]:
+    def search_law_records(
+        self,
+        question: str,
+        limit: int = 8,
+        *,
+        as_of_date: date | None = None,
+    ) -> list[LawHit]:
         query_terms = terms(question)
         if not query_terms:
             return []
         normalized_question = normalize_persian(question).lower().translate(DIGIT_TRANSLATION)
+        requested_year_match = re.search(r"\b(1[34]\d{2})\b", normalized_question)
+        requested_year = int(requested_year_match.group(1)) if requested_year_match else None
+        target_date = as_of_date or date.today()
         article_match = re.search(r"(?:ماده\s*)?(\d+)\s*(?:مکرر)?", normalized_question)
         requested_article = article_match.group(1) if article_match and "ماده" in normalized_question else None
         if "ارث" in normalized_question:
@@ -188,6 +203,14 @@ class AdvisorService:
         asks_for_article = self._asks_for_article(question)
         hits: list[LawHit] = []
         for record, record_terms, keyword_terms, keyword_text in indexed_records:
+            if record.legal_status not in {"valid", "unknown"}:
+                continue
+            if record.effective_date and record.effective_date > target_date:
+                continue
+            if record.expiry_date and record.expiry_date < target_date:
+                continue
+            if requested_year and record.fiscal_year and record.fiscal_year != requested_year:
+                continue
             if (
                 record.source_id == "curated-tax-qa"
                 and self._is_ambiguous_curated_question(keyword_text)
@@ -219,6 +242,8 @@ class AdvisorService:
             ):
                 continue
             score = sum(term_weights[term] for term in overlap) / total_query_weight
+            score += 0.18 if record.source_type == "official" else 0.0
+            score -= 0.12 if record.legal_status == "unknown" else 0.0
             if keyword_terms:
                 if keyword_overlap >= 0.5 or keyword_similarity >= 0.65:
                     score += (0.45 * keyword_overlap) + (0.3 * keyword_similarity)
@@ -305,6 +330,16 @@ class AdvisorService:
                 official_text=record.official_text,
                 keywords=record.keywords,
                 source_url=record.source_url,
+                source_type=(
+                    "practical"
+                    if record.source_id == "curated-tax-qa"
+                    else record.source_type
+                ),
+                legal_status=record.legal_status,
+                fiscal_year=record.fiscal_year,
+                effective_date=record.effective_date,
+                expiry_date=record.expiry_date,
+                last_verified_at=record.last_verified_at,
             )
             keyword_text = normalize_persian(snapshot.keywords).lower()
             keyword_terms = terms(keyword_text)
@@ -349,7 +384,9 @@ class AdvisorService:
             or concept_answer
             or broad_general
         )
-        candidate_law_hits = self.search_law_records(question) if should_search else []
+        candidate_law_hits = self.search_law_records(
+            question, as_of_date=as_of_date
+        ) if should_search else []
         strong_curated_match = bool(
             candidate_law_hits
             and candidate_law_hits[0].record.source_id == "curated-tax-qa"

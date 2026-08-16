@@ -12,6 +12,8 @@ from sqlalchemy.orm import Session
 from app.api.dependencies import get_current_user, get_session, require_permissions
 from app.models.auth import User, new_uuid
 from app.models.portal import LawReferenceRecord, LegalCategory, LegalExternalSource, LegalUpdateCandidate
+from app.repositories.auth import AuthRepository
+from app.services.legal_monitor import validate_public_source_url
 
 router = APIRouter(prefix="/api/v1/legal", tags=["legal center"])
 manage_router = APIRouter(prefix="/api/v1/legal/manage", tags=["legal management"])
@@ -131,6 +133,13 @@ class LawPayload(BaseModel):
     effective_date: date | None = None
     source_info: str = Field(default="", max_length=500)
     source_url: str = Field(default="", max_length=1000)
+    clause: str = Field(default="", max_length=80)
+    source_type: str = Field(default="official", pattern=r"^(official|practical)$")
+    legal_status: str = Field(default="valid", pattern=r"^(valid|amended|repealed|expired|unknown)$")
+    fiscal_year: int | None = Field(default=None, ge=1300, le=1500)
+    approval_date: date | None = None
+    expiry_date: date | None = None
+    supersedes_record_id: str | None = None
 
 
 class SourcePayload(BaseModel):
@@ -166,6 +175,10 @@ def law_data(item: LawReferenceRecord, category_title: str | None = None, includ
         "keywords": item.keywords, "category_id": item.category_id,
         "category_title": category_title, "publication_date": item.publication_date,
         "effective_date": item.effective_date, "is_active": item.is_active,
+        "approval_date": item.approval_date, "expiry_date": item.expiry_date,
+        "fiscal_year": item.fiscal_year, "source_type": item.source_type,
+        "legal_status": item.legal_status, "clause": item.clause,
+        "last_verified_at": item.last_verified_at,
         "updated_at": item.updated_at,
         "suggested_questions": suggested_questions(item),
     }
@@ -298,9 +311,11 @@ def manage_laws(
 
 
 @manage_router.post("/laws", status_code=201)
-def create_law(payload: LawPayload, _: Annotated[User, Depends(require_permissions("documents:manage"))], session: Annotated[Session, Depends(get_session)]):
-    item = LawReferenceRecord(id=new_uuid(), source_id="manual", **payload.model_dump())
-    session.add(item); session.commit(); session.refresh(item)
+def create_law(payload: LawPayload, user: Annotated[User, Depends(require_permissions("documents:manage"))], session: Annotated[Session, Depends(get_session)]):
+    item = LawReferenceRecord(id=new_uuid(), source_id="manual", verified_by_user_id=user.id, last_verified_at=datetime.now(timezone.utc), **payload.model_dump())
+    session.add(item); session.flush()
+    AuthRepository(session).add_audit("legal.source_verified", "law_reference_record", actor_user_id=user.id, resource_id=item.id, metadata={"source_type": item.source_type, "legal_status": item.legal_status})
+    session.commit(); session.refresh(item)
     return law_data(item, include_source=True)
 
 
@@ -344,6 +359,7 @@ def check_sources_now(request: Request, _: Annotated[User, Depends(require_permi
 
 @manage_router.post("/sources", status_code=201)
 def create_source(payload: SourcePayload, _: Annotated[User, Depends(require_permissions("documents:manage"))], session: Annotated[Session, Depends(get_session)]):
+    validate_public_source_url(payload.base_url)
     item = LegalExternalSource(**payload.model_dump())
     session.add(item); session.commit(); session.refresh(item)
     return {"id": item.id, **payload.model_dump(), "last_status": item.last_status}
@@ -351,6 +367,7 @@ def create_source(payload: SourcePayload, _: Annotated[User, Depends(require_per
 
 @manage_router.patch("/sources/{source_id}")
 def update_source(source_id: str, payload: SourcePayload, _: Annotated[User, Depends(require_permissions("documents:manage"))], session: Annotated[Session, Depends(get_session)]):
+    validate_public_source_url(payload.base_url)
     item = session.get(LegalExternalSource, source_id)
     if item is None:
         raise HTTPException(404, "منبع پیدا نشد.")
@@ -396,7 +413,18 @@ def review_candidate(candidate_id: str, payload: ReviewPayload, user: Annotated[
             official_text=item.proposed_text, source_url=item.source_url, keywords="",
             category_id=payload.category_id, source_info="به‌روزرسانی تأییدشده",
         )
+        law.source_type = "official"
+        law.legal_status = "valid"
+        law.verified_by_user_id = user.id
+        law.last_verified_at = datetime.now(timezone.utc)
         session.add(law)
         record_id = law.id
+    AuthRepository(session).add_audit(
+        "legal.update_reviewed",
+        "legal_update_candidate",
+        actor_user_id=user.id,
+        resource_id=item.id,
+        metadata={"decision": payload.decision, "record_id": record_id},
+    )
     session.commit()
     return {"status": item.status, "record_id": record_id}
