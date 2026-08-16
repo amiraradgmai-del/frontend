@@ -60,6 +60,16 @@ def main() -> None:
         if source.exists():
             shutil.copy2(source, HOME / "backend" / name)
 
+    dependencies = subprocess.run(
+        [str(PYTHON), "-m", "pip", "install", "--disable-pip-version-check", "."],
+        cwd=HOME / "backend",
+        capture_output=True,
+        text=True,
+        timeout=300,
+    )
+    if dependencies.returncode:
+        raise RuntimeError(dependencies.stderr or dependencies.stdout)
+
     migration = subprocess.run(
         [str(PYTHON), "-m", "alembic", "upgrade", "head"],
         cwd=HOME / "backend",
