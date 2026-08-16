@@ -3,6 +3,7 @@ from __future__ import annotations
 import base64
 import importlib.util
 import os
+import sqlite3
 from pathlib import Path
 
 import pytest
@@ -57,3 +58,22 @@ def test_key_validation_and_retention(tmp_path: Path) -> None:
     assert dr.prune_backups(tmp_path, 14) == 1
     assert not old.exists()
     assert recent.exists()
+
+
+def test_sqlite_backup_is_consistent(tmp_path: Path) -> None:
+    source = tmp_path / "source.db"
+    with sqlite3.connect(source) as connection:
+        connection.execute("CREATE TABLE records (id INTEGER PRIMARY KEY, value TEXT)")
+        connection.execute("INSERT INTO records (value) VALUES ('tax')")
+
+    target = tmp_path / "backup.db"
+    dr.create_database_backup(target, f"sqlite:///{source.as_posix()}")
+
+    with sqlite3.connect(target) as connection:
+        assert connection.execute("PRAGMA integrity_check").fetchone() == ("ok",)
+        assert connection.execute("SELECT value FROM records").fetchone() == ("tax",)
+
+
+def test_sqlite_memory_database_is_rejected() -> None:
+    with pytest.raises(ValueError):
+        dr.sqlite_path_from_url("sqlite:///:memory:")

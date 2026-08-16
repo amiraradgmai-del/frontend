@@ -6,6 +6,7 @@ import hashlib
 import json
 import os
 import shutil
+import sqlite3
 import subprocess
 import tarfile
 import tempfile
@@ -182,11 +183,50 @@ def create_postgres_dump(target: Path) -> None:
     subprocess.run(["pg_restore", "--list", str(target)], check=True, stdout=subprocess.DEVNULL)
 
 
-def run_once(output: Path, storage: Path, key: str, retention_days: int) -> Path:
+def sqlite_path_from_url(database_url: str) -> Path:
+    prefix = "sqlite:///"
+    if not database_url.startswith(prefix):
+        raise ValueError("Database URL is not SQLite")
+    value = database_url[len(prefix):].split("?", 1)[0]
+    if not value or value == ":memory:":
+        raise ValueError("A persistent SQLite database path is required")
+    return Path(value).expanduser().resolve()
+
+
+def create_sqlite_backup(source: Path, target: Path) -> None:
+    source = source.resolve()
+    if not source.is_file():
+        raise FileNotFoundError(f"SQLite database does not exist: {source}")
+    source_connection = sqlite3.connect(f"file:{source.as_posix()}?mode=ro", uri=True)
+    target_connection = sqlite3.connect(target)
+    try:
+        source_connection.backup(target_connection)
+        row = target_connection.execute("PRAGMA integrity_check").fetchone()
+        if not row or row[0] != "ok":
+            raise ValueError("SQLite backup failed integrity_check")
+    finally:
+        target_connection.close()
+        source_connection.close()
+
+
+def create_database_backup(target: Path, database_url: str) -> None:
+    if database_url.startswith("sqlite:///"):
+        create_sqlite_backup(sqlite_path_from_url(database_url), target)
+        return
+    create_postgres_dump(target)
+
+
+def run_once(
+    output: Path,
+    storage: Path,
+    key: str,
+    retention_days: int,
+    database_url: str,
+) -> Path:
     output.mkdir(parents=True, exist_ok=True)
     with tempfile.TemporaryDirectory(prefix="chakah-db-") as directory_name:
         dump = Path(directory_name) / "database.dump"
-        create_postgres_dump(dump)
+        create_database_backup(dump, database_url)
         stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
         bundle = create_bundle(dump, storage, output / f"chakah-dr-{stamp}.drbk", key)
     verify_bundle(bundle, key)
@@ -200,13 +240,25 @@ def main() -> None:
     parser.add_argument("--storage", type=Path, default=Path("/storage"))
     parser.add_argument("--interval", type=int, default=int(os.getenv("BACKUP_INTERVAL_SECONDS", "86400")))
     parser.add_argument("--retention-days", type=int, default=int(os.getenv("BACKUP_RETENTION_DAYS", "14")))
+    parser.add_argument(
+        "--database-url",
+        default=os.getenv("TAX_AI_DATABASE_URL") or os.getenv("DATABASE_URL", ""),
+    )
     parser.add_argument("--once", action="store_true")
     args = parser.parse_args()
     key = os.environ.get("DR_ENCRYPTION_KEY", "")
     if not key:
         raise SystemExit("DR_ENCRYPTION_KEY is required")
+    if not args.database_url:
+        raise SystemExit("TAX_AI_DATABASE_URL or --database-url is required")
     while True:
-        bundle = run_once(args.output, args.storage, key, args.retention_days)
+        bundle = run_once(
+            args.output,
+            args.storage,
+            key,
+            args.retention_days,
+            args.database_url,
+        )
         print(f"Verified encrypted DR backup: {bundle}", flush=True)
         if args.once:
             break
