@@ -17,6 +17,11 @@ PROHIBITED_TERMS = {
     "پنهان کردن فروش": "sales_concealment",
     "پنهان‌کردن فروش": "sales_concealment",
     "ثبت نکردن فروش": "sales_concealment",
+    "پنهان کنم": "income_concealment",
+    "حذف درآمد": "income_concealment",
+    "اطلاعات خلاف واقع": "false_information",
+    "دور زدن ثبت صورتحساب": "tax_evasion",
+    "دور زدن صورتحساب": "tax_evasion",
 }
 SENSITIVE_TERMS = {
     "برگ تشخیص": "assessment_notice",
@@ -91,7 +96,7 @@ def evaluate_question(question: str) -> RuleResult:
         questions.append("نوع جریمه و دوره مالیاتی موردنظر چیست؟")
     time_sensitive = any(
         term in normalized
-        for term in ("نرخ", "معافیت", "نصاب", "سقف", "امسال", "سال جاری")
+        for term in ("نرخ", "معافیت", "نصاب", "سقف", "مهلت", "جریمه", "امسال", "سال جاری")
     )
     has_fiscal_year = bool(re.search(r"\b1[34]\d{2}\b", normalized.translate(str.maketrans("۰۱۲۳۴۵۶۷۸۹٠١٢٣٤٥٦٧٨٩", "01234567890123456789"))))
     if time_sensitive and not has_fiscal_year:

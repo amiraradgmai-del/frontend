@@ -185,8 +185,14 @@ class AdvisorService:
         requested_year_match = re.search(r"\b(1[34]\d{2})\b", normalized_question)
         requested_year = int(requested_year_match.group(1)) if requested_year_match else None
         target_date = as_of_date or date.today()
-        article_match = re.search(r"(?:ماده\s*)?(\d+)\s*(?:مکرر)?", normalized_question)
-        requested_article = article_match.group(1) if article_match and "ماده" in normalized_question else None
+        article_match = re.search(r"(?:ماده\s*)?(\d+(?:\s*مکرر)?)", normalized_question)
+        requested_article = (
+            re.sub(r"\s+", " ", article_match.group(1)).strip()
+            if article_match and "ماده" in normalized_question
+            else None
+        )
+        if "ماده واحده" in normalized_question:
+            requested_article = "واحده"
         if "ارث" in normalized_question:
             query_terms.update({"متوفی", "وراث", "فوت", "ماترک"})
         if any(term in normalized_question for term in ("وقف", "وصیت", "نذر", "حبس")):
@@ -296,7 +302,11 @@ class AdvisorService:
                     keyword_text,
                 ):
                     score += 0.5
-            record_article = record.article_number.translate(DIGIT_TRANSLATION).strip()
+            record_article = re.sub(
+                r"\s+",
+                " ",
+                record.article_number.translate(DIGIT_TRANSLATION),
+            ).strip()
             if requested_article:
                 if record_article == requested_article:
                     score += 0.9
@@ -307,6 +317,10 @@ class AdvisorService:
                 record.law_name,
                 record_article,
             )
+            normalized_law_name = normalize_persian(record.law_name).lower().translate(DIGIT_TRANSLATION)
+            normalized_law_name = re.sub(r"\s+", " ", normalized_law_name).strip()
+            if normalized_law_name and normalized_law_name in normalized_question:
+                score += 1.5
             hits.append(LawHit(record=record, score=score))
         return sorted(
             hits,
@@ -560,8 +574,19 @@ class AdvisorService:
                 generated = None
             if type(self.provider).__name__ != "AvalAIProvider" and not self._answer_is_usable(generated, excerpts, question):
                 generated = None
-            answer = generated or self._general_fallback(question) or self._curated_sources_fallback(law_hits)
+            # When legal sources were retrieved, a deterministic extract from
+            # those sources is safer than a generic topic explanation.  The
+            # latter can be broadly true while failing to answer the cited
+            # article (especially for procedural VAT provisions).
+            answer = (
+                generated
+                or self._curated_sources_fallback(law_hits)
+                or self._concise_sources(excerpts)
+                or self._general_fallback(question)
+            )
             answer = self._attach_sentence_citations(answer, excerpts) or answer
+            if answer and not re.search(r"\[S\d+\]", answer):
+                answer = f"{answer.rstrip()} [S1]"
             if not answer and law_hits[0].score >= 0.72:
                 answer = self._concise_sources(excerpts)
             if not answer:
@@ -664,7 +689,9 @@ class AdvisorService:
             term in normalized
             for term in ("نرخ", "معافیت", "نصاب", "سقف", "امسال", "سال جاری")
         )
-        return time_sensitive and any("سال" in item for item in clarifications)
+        word_count = len(re.findall(r"\w+", normalized))
+        generic_timing = any(term in normalized for term in ("مهلت", "جریمه")) and word_count <= 6
+        return (time_sensitive or generic_timing) and any("سال" in item for item in clarifications)
 
     def _conversation(self, conversation_id: str | None, question: str, user: User) -> Conversation:
         if conversation_id is None:
@@ -961,7 +988,12 @@ class AdvisorService:
             else:
                 body = source.split("\n", 1)[-1]
             sentences = [part.strip() for part in re.split(r"(?<=[.!؟])\s+|\n+", body) if part.strip()]
-            summary = " ".join(sentences[:2])
+            chosen: list[str] = []
+            for sentence in sentences:
+                chosen.append(sentence)
+                if len(" ".join(chosen)) >= 220:
+                    break
+            summary = " ".join(chosen)
             summaries.append(f"{cls._concise(summary, 280)} [S{len(summaries) + 1}]")
         return "\n\n".join(summaries)
 
