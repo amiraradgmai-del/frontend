@@ -29,6 +29,7 @@ export default function TicketsPage() {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   const selected = items.find((item) => item.id === selectedId) ?? items[0];
+  const unanswered = items.find((item) => item.status === "open");
 
   const load = useCallback(() => api<Ticket[]>("api/v1/portal/tickets").then((result) => {
     setItems(result);
@@ -43,6 +44,7 @@ export default function TicketsPage() {
 
   async function create(event: FormEvent) {
     event.preventDefault();
+    if (unanswered) { setSelectedId(unanswered.id); setError("ابتدا پاسخ همین گفتگوی باز را پیگیری کنید؛ پس از پاسخ پشتیبانی می‌توانید گفتگوی جدید بسازید."); return; }
     setError("");
     try {
       const ticket = await api<Ticket>("api/v1/portal/tickets", { method: "POST", body: JSON.stringify({ subject, category: "general", message }) });
@@ -79,7 +81,8 @@ export default function TicketsPage() {
           <p className="mb-2 text-xs font-bold text-slate-500">سؤالات پرتکرار؛ پاسخ فوری و بدون هوش مصنوعی</p>
           <div className="flex flex-wrap gap-2">{frequentQuestions.map(({ question, answer }) => <button type="button" key={question} onClick={() => { setFaqAnswer(answer); setError(""); }} className="rounded-lg bg-slate-50 px-2.5 py-2 text-right text-[11px] leading-5 text-slate-600 transition hover:bg-blue-50 hover:text-blue-700">{question}</button>)}</div>
           {faqAnswer && <div className="mt-3 rounded-xl border border-blue-100 bg-blue-50 p-3 text-xs leading-6 text-slate-700"><p className="mb-1 font-black text-blue-700">پاسخ آماده</p><p>{faqAnswer}</p></div>}
-          <form onSubmit={create} className="mt-4 space-y-3"><Input value={subject} onChange={(event) => setSubject(event.target.value)} placeholder="موضوع درخواست" required /><Textarea value={message} onChange={(event) => setMessage(event.target.value)} placeholder="پیام اولیه" required /><Button className="w-full">شروع گفتگو</Button></form>
+          {unanswered && <button type="button" onClick={() => setSelectedId(unanswered.id)} className="mt-4 w-full rounded-xl border border-amber-200 bg-amber-50 p-3 text-right text-xs leading-6 text-amber-900"><b>یک درخواست منتظر پاسخ دارید.</b><br />برای افزودن پیام یا فایل، همین گفتگو را باز کنید.</button>}
+          <form onSubmit={create} className="mt-4 space-y-3"><Input value={subject} onChange={(event) => setSubject(event.target.value)} placeholder="موضوع درخواست" required disabled={Boolean(unanswered)} /><Textarea value={message} onChange={(event) => setMessage(event.target.value)} placeholder="پیام اولیه" required disabled={Boolean(unanswered)} /><Button className="w-full" disabled={Boolean(unanswered)}>{unanswered ? "در انتظار پاسخ گفتگوی باز" : "شروع گفتگو"}</Button></form>
         </CardContent></Card>
         {items.map((item) => <button key={item.id} onClick={() => setSelectedId(item.id)} className={`w-full rounded-2xl border p-4 text-right ${selected?.id === item.id ? "border-blue-400 bg-blue-50" : "bg-white"}`}><div className="flex justify-between gap-2"><b className="truncate">{item.subject}</b><Status value={item.status} /></div><p className="mt-2 text-xs text-slate-400">{item.messages.length.toLocaleString("fa-IR")} پیام</p></button>)}
       </aside>

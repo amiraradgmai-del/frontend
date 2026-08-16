@@ -1,7 +1,7 @@
 "use client";
 
 import { FormEvent, useEffect, useState } from "react";
-import { BadgeCheck, BriefcaseBusiness, Clock3, Save, ShieldAlert, UserRound } from "lucide-react";
+import { BadgeCheck, BriefcaseBusiness, Clock3, Rocket, Save, ShieldAlert, UserRound } from "lucide-react";
 import { api, ApiError } from "@/lib/api";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
@@ -14,7 +14,7 @@ type Profile = {
   specialties: string[]; skills: string[]; qualifications: string; education: Array<{ title?: string }>;
   certifications: Array<{ title?: string }>; work_history: Array<{ title?: string }>; weekly_schedule: { notes?: string };
   profile_image_url: string; years_experience: number; consultation_price: number; city: string; office_address: string;
-  is_online: boolean; offers_in_person: boolean; is_verified: boolean; verification_requests: Review[];
+  is_online: boolean; offers_in_person: boolean; is_verified: boolean; boosted_until?: string | null; verification_requests: Review[];
 };
 
 const statusLabel = { pending: "در انتظار بررسی", approved: "تأییدشده", rejected: "ردشده", correction_required: "نیازمند اصلاح" };
@@ -78,6 +78,17 @@ export default function ConsultantProfilePage() {
     finally { setBusy(false); }
   }
 
+  async function boost() {
+    if (!window.confirm("با پرداخت ۹۹٬۰۰۰ تومان، پروفایل شما هفت روز در بالای فهرست نمایش داده شود؟")) return;
+    setBusy(true); setMessage("");
+    try {
+      const result = await api<{ boosted_until: string }>("api/v1/consultations/profile/boost", { method: "POST" });
+      setProfile((current) => current ? { ...current, boosted_until: result.boosted_until } : current);
+      setMessage("پروفایل شما با موفقیت برای هفت روز ارتقا یافت.");
+    } catch (error) { setMessage(error instanceof ApiError ? error.message : "ارتقای پروفایل انجام نشد."); }
+    finally { setBusy(false); }
+  }
+
   if (!profile) return <div className="rounded-2xl bg-white p-10 text-center text-sm text-slate-500">{message || "در حال دریافت پروفایل..."}</div>;
 
   return <div className="space-y-7">
@@ -91,6 +102,8 @@ export default function ConsultantProfilePage() {
 
     {latest?.admin_note && <div className="rounded-2xl border border-amber-200 bg-amber-50 p-5 text-sm leading-7 text-amber-950"><p className="flex items-center gap-2 font-black"><ShieldAlert className="size-5" /> توضیح مدیر</p><p className="mt-2">{latest.admin_note}</p></div>}
     {message && <p className="rounded-xl bg-sky-50 p-4 text-sm text-sky-800">{message}</p>}
+
+    <Card className="border-amber-200 bg-gradient-to-l from-amber-50 to-white"><CardContent className="flex flex-wrap items-center justify-between gap-4 p-5"><div><p className="flex items-center gap-2 font-black"><Rocket className="text-amber-600" /> نردبان پروفایل</p><p className="mt-1 text-sm text-slate-600">نمایش در بالای فهرست مشاوران برای ۷ روز؛ هزینه ۹۹٬۰۰۰ تومان از کیف پول.</p>{profile.boosted_until && new Date(profile.boosted_until) > new Date() && <p className="mt-2 text-xs font-bold text-emerald-700">فعال تا {new Date(profile.boosted_until).toLocaleString("fa-IR")}</p>}</div><Button type="button" variant="outline" disabled={busy || !profile.is_verified} onClick={() => void boost()}>ارتقای پروفایل</Button></CardContent></Card>
 
     <Card className="border-white/70 bg-white/95"><CardHeader><CardTitle>اطلاعات پروفایل</CardTitle><CardDescription>هر خط در سوابق و مدارک به‌عنوان یک مورد جدا ثبت می‌شود.</CardDescription></CardHeader><CardContent>
       <form onSubmit={submit} className="grid gap-4 sm:grid-cols-2">

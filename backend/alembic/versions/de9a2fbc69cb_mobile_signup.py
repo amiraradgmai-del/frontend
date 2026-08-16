@@ -20,34 +20,28 @@ depends_on: str | Sequence[str] | None = None
 
 def upgrade() -> None:
     # ایمیل کاربر اختیاری می‌شود.
-    op.alter_column(
-        "users",
-        "email",
-        existing_type=sa.String(length=320),
-        nullable=True,
-    )
+    with op.batch_alter_table("users") as batch_op:
+        batch_op.alter_column(
+            "email",
+            existing_type=sa.String(length=320),
+            nullable=True,
+        )
 
     # درخواست‌های ثبت‌نام قبلی موقتی هستند و با ساختار جدید
     # شماره موبایل سازگار نیستند؛ بنابراین پاک می‌شوند.
     op.execute("DELETE FROM pending_registrations")
 
     # شماره موبایل به ثبت‌نام موقت اضافه می‌شود.
-    op.add_column(
-        "pending_registrations",
-        sa.Column(
-            "phone",
-            sa.String(length=20),
-            nullable=False,
-        ),
-    )
-
-    # ایمیل در ثبت‌نام اختیاری می‌شود.
-    op.alter_column(
-        "pending_registrations",
-        "email",
-        existing_type=sa.String(length=320),
-        nullable=True,
-    )
+    with op.batch_alter_table("pending_registrations") as batch_op:
+        batch_op.add_column(
+            sa.Column("phone", sa.String(length=20), nullable=False)
+        )
+        # ایمیل در ثبت‌نام اختیاری می‌شود.
+        batch_op.alter_column(
+            "email",
+            existing_type=sa.String(length=320),
+            nullable=True,
+        )
 
     # هر شماره موبایل فقط یک ثبت‌نام در حال انتظار داشته باشد.
     op.create_index(
@@ -65,6 +59,7 @@ def upgrade() -> None:
         ["phone"],
         unique=True,
         postgresql_where=sa.text("phone <> ''"),
+        sqlite_where=sa.text("phone <> ''"),
     )
 
 
@@ -84,17 +79,13 @@ def downgrade() -> None:
         "DELETE FROM pending_registrations WHERE email IS NULL"
     )
 
-    op.alter_column(
-        "pending_registrations",
-        "email",
-        existing_type=sa.String(length=320),
-        nullable=False,
-    )
-
-    op.drop_column(
-        "pending_registrations",
-        "phone",
-    )
+    with op.batch_alter_table("pending_registrations") as batch_op:
+        batch_op.alter_column(
+            "email",
+            existing_type=sa.String(length=320),
+            nullable=False,
+        )
+        batch_op.drop_column("phone")
 
     # برای کاربران موبایلی بدون ایمیل، هنگام بازگشت یک ایمیل داخلی می‌سازیم.
     op.execute(
@@ -108,9 +99,9 @@ def downgrade() -> None:
         """
     )
 
-    op.alter_column(
-        "users",
-        "email",
-        existing_type=sa.String(length=320),
-        nullable=False,
-    )
+    with op.batch_alter_table("users") as batch_op:
+        batch_op.alter_column(
+            "email",
+            existing_type=sa.String(length=320),
+            nullable=False,
+        )

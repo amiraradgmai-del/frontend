@@ -18,6 +18,10 @@ RUN pip install ".[dev]"
 COPY tests ./tests
 CMD ["pytest"]
 
+FROM base AS backup
+USER root
+RUN apt-get update && apt-get install -y --no-install-recommends postgresql-client && rm -rf /var/lib/apt/lists/*
+
 FROM base AS runtime
 RUN addgroup --system taxai && adduser --system --ingroup taxai taxai
 USER taxai

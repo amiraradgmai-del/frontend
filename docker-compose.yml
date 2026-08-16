@@ -231,7 +231,9 @@ services:
     restart: unless-stopped
 
   backup:
-    image: public.ecr.aws/docker/library/postgres:17-alpine
+    build:
+      context: ./backend
+      target: backup
 
     environment:
       PGHOST: db
@@ -240,8 +242,9 @@ services:
       PGPASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in the root .env file}
       BACKUP_INTERVAL_SECONDS: ${BACKUP_INTERVAL_SECONDS:-86400}
       BACKUP_RETENTION_DAYS: ${BACKUP_RETENTION_DAYS:-14}
+      DR_ENCRYPTION_KEY: ${DR_ENCRYPTION_KEY:?Set a base64 32-byte DR_ENCRYPTION_KEY}
 
-    command: ["/bin/sh", "/ops/backup-loop.sh"]
+    command: ["python", "/ops/disaster_recovery.py"]
 
     depends_on:
       db:
@@ -249,6 +252,7 @@ services:
 
     volumes:
       - database_backups:/backups
+      - documents_data:/storage:ro
       - ./ops:/ops:ro
 
     restart: unless-stopped

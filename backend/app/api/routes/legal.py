@@ -6,7 +6,7 @@ from typing import Annotated
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from pydantic import BaseModel, Field
-from sqlalchemy import func, or_, select
+from sqlalchemy import and_, func, not_, or_, select
 from sqlalchemy.orm import Session
 
 from app.api.dependencies import get_current_user, get_session, require_permissions
@@ -17,6 +17,18 @@ router = APIRouter(prefix="/api/v1/legal", tags=["legal center"])
 manage_router = APIRouter(prefix="/api/v1/legal/manage", tags=["legal management"])
 NON_LEGAL_TITLES = {"راهنمای کاربردی مالیاتی"}
 PERSIAN_DIGITS = str.maketrans("۰۱۲۳۴۵۶۷۸۹٠١٢٣٤٥٦٧٨٩", "01234567890123456789")
+CATEGORY_HINTS = {
+    "direct-tax": ("مالیات های مستقیم", "مالیات‌های مستقیم"),
+    "vat": ("ارزش افزوده",),
+    "tax-procedure": ("دادرسی", "اعتراض", "حل اختلاف", "آیین دادرسی", "هیأت"),
+    "insurance": ("بیمه", "تأمین اجتماعی"),
+    "commercial": ("تجارت", "شرکت", "چک", "ورشکستگی"),
+    "labor": ("قانون کار", "کارگر", "کارفرما"),
+    "accounting": ("حسابداری", "گزارشگری", "صورت مالی"),
+    "circular": ("بخشنامه",),
+    "regulation": ("آیین نامه", "آیین‌نامه"),
+    "directive": ("دستورالعمل",),
+}
 
 
 def normalized_article_query(value: str) -> str | None:
@@ -37,13 +49,67 @@ def canonical_law_name(value: str) -> str:
 
 
 def unique_law_rows(rows) -> list[tuple[LawReferenceRecord, str | None]]:
-    selected: dict[tuple[str, str], tuple[LawReferenceRecord, str | None]] = {}
+    selected: dict[tuple[str, str, str], tuple[LawReferenceRecord, str | None]] = {}
     for item, category_title in rows:
-        key = (canonical_law_name(item.law_name), item.article_number.translate(PERSIAN_DIGITS).strip())
+        article = item.article_number.translate(PERSIAN_DIGITS).strip()
+        # Numbered articles can be deduplicated by law and article. Unnumbered
+        # clauses are distinct records and must not collapse into one result.
+        unnumbered_identity = "" if article else re.sub(r"\s+", " ", item.official_text).strip()
+        key = (canonical_law_name(item.law_name), article, unnumbered_identity)
         current = selected.get(key)
         if current is None or len(item.official_text) > len(current[0].official_text):
             selected[key] = (item, category_title)
     return list(selected.values())
+
+
+def category_condition(category: LegalCategory):
+    conditions = [LawReferenceRecord.category_id == category.id]
+    for hint in CATEGORY_HINTS.get(category.code, ()):
+        pattern = f"%{hint}%"
+        hint_conditions = (
+            LawReferenceRecord.law_name.ilike(pattern),
+            LawReferenceRecord.chapter.ilike(pattern),
+            LawReferenceRecord.keywords.ilike(pattern),
+        )
+        conditions.extend(hint_conditions)
+    if category.code == "other":
+        all_known_hints = []
+        for code, hints in CATEGORY_HINTS.items():
+            if code == "other":
+                continue
+            for hint in hints:
+                pattern = f"%{hint}%"
+                all_known_hints.extend((
+                    LawReferenceRecord.law_name.ilike(pattern),
+                    LawReferenceRecord.chapter.ilike(pattern),
+                    LawReferenceRecord.keywords.ilike(pattern),
+                ))
+        conditions.append(and_(LawReferenceRecord.category_id.is_(None), not_(or_(*all_known_hints))))
+    return or_(*conditions)
+
+
+def inferred_category_title(item: LawReferenceRecord, categories_by_code: dict[str, LegalCategory]) -> str | None:
+    haystack = f"{item.law_name} {item.chapter} {item.keywords}".replace("ي", "ی").replace("ك", "ک")
+    for code, hints in CATEGORY_HINTS.items():
+        if any(hint in haystack for hint in hints) and code in categories_by_code:
+            return categories_by_code[code].title
+    other = categories_by_code.get("other")
+    return other.title if other else None
+
+
+def suggested_questions(item: LawReferenceRecord) -> list[dict[str, str]]:
+    article = item.article_number.strip()
+    law_name = canonical_law_name(item.law_name)
+    if not article:
+        subject = item.chapter.strip() or "این حکم قانونی"
+        return [
+            {"question": f"حکم «{subject}» در {law_name} چیست؟", "answer": item.official_text},
+            {"question": f"برای اجرای حکم «{subject}» باید به چه نکاتی توجه کنم؟", "answer": f"مبنای بررسی، متن رسمی همین حکم است. اشخاص، تکالیف، مهلت‌ها و استثناهای متن را با وضعیت پرونده خود تطبیق دهید.\n\nمتن رسمی حکم:\n{item.official_text}"},
+        ]
+    return [
+        {"question": f"ماده {article} {law_name} دقیقاً چه می‌گوید؟", "answer": item.official_text},
+        {"question": f"برای اجرای ماده {article} {law_name} باید به چه نکاتی توجه کنم؟", "answer": f"مبنای بررسی، متن رسمی همین ماده است. ابتدا اشخاص و تکالیف ذکرشده در ماده را با وضعیت پرونده خود تطبیق دهید، سپس مهلت‌ها، استثناها و تبصره‌های مرتبط را کنترل کنید.\n\nمتن رسمی ماده:\n{item.official_text}"},
+    ]
 
 
 class CategoryPayload(BaseModel):
@@ -101,6 +167,7 @@ def law_data(item: LawReferenceRecord, category_title: str | None = None, includ
         "category_title": category_title, "publication_date": item.publication_date,
         "effective_date": item.effective_date, "is_active": item.is_active,
         "updated_at": item.updated_at,
+        "suggested_questions": suggested_questions(item),
     }
     if include_source:
         result.update({"source_id": item.source_id, "source_info": item.source_info, "source_url": item.source_url, "archived_at": item.archived_at})
@@ -110,7 +177,12 @@ def law_data(item: LawReferenceRecord, category_title: str | None = None, includ
 @router.get("/categories")
 def categories(_: Annotated[User, Depends(get_current_user)], session: Annotated[Session, Depends(get_session)]):
     items = session.scalars(select(LegalCategory).where(LegalCategory.is_active.is_(True)).order_by(LegalCategory.sort_order, LegalCategory.title)).all()
-    return [category_data(item) for item in items]
+    result = []
+    for item in items:
+        data = category_data(item)
+        data["law_count"] = session.scalar(select(func.count(LawReferenceRecord.id)).where(LawReferenceRecord.is_active.is_(True), category_condition(item))) or 0
+        result.append(data)
+    return result
 
 
 @router.get("/search")
@@ -144,11 +216,17 @@ def search_laws(
             if number_match:
                 conditions.append(LawReferenceRecord.article_number.in_(article_variants(number_match.group())))
             query = query.where(or_(*conditions))
+    category_items = session.scalars(select(LegalCategory).where(LegalCategory.is_active.is_(True))).all()
+    categories_by_code = {item.code: item for item in category_items}
     if category_id:
-        query = query.where(LawReferenceRecord.category_id == category_id)
-    rows = session.execute(query.order_by(LawReferenceRecord.law_name, LawReferenceRecord.article_number)).all()
+        selected_category = next((item for item in category_items if item.id == category_id), None)
+        if selected_category is None:
+            raise HTTPException(404, "دسته‌بندی پیدا نشد.")
+        query = query.where(category_condition(selected_category))
+    fetch_limit = max(limit * 4, offset + limit * 3)
+    rows = session.execute(query.order_by(LawReferenceRecord.law_name, LawReferenceRecord.article_number).limit(fetch_limit)).all()
     unique_rows = unique_law_rows(rows)
-    return [law_data(item, category_title) for item, category_title in unique_rows[offset:offset + limit]]
+    return [law_data(item, category_title or inferred_category_title(item, categories_by_code)) for item, category_title in unique_rows[offset:offset + limit]]
 
 
 @router.get("/records/{record_id}")

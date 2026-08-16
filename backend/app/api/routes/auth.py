@@ -2,9 +2,10 @@ from __future__ import annotations
 
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, HTTPException, Response, status
+from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
 
-from app.api.dependencies import get_auth_service
+from app.api.dependencies import get_auth_service, get_current_user
+from app.models.auth import User
 from app.schemas.auth import (
     LoginRequest,
     LogoutRequest,
@@ -34,6 +35,7 @@ from app.services.auth import (
     VerificationRateLimitedError,
     user_response,
 )
+from app.services.captcha import CaptchaVerifier
 from app.services.email import EmailDeliveryError
 from app.services.site import feature_enabled
 from app.services.sms import SmsDeliveryError
@@ -43,6 +45,15 @@ router = APIRouter(
     prefix="/auth",
     tags=["authentication"],
 )
+
+
+@router.get("/captcha/config")
+def captcha_config(request: Request) -> dict[str, str | bool | None]:
+    verifier = CaptchaVerifier(request.app.state.settings)
+    return {
+        "enabled": verifier.enabled,
+        "site_key": request.app.state.settings.turnstile_site_key if verifier.enabled else None,
+    }
 
 
 @router.post(
@@ -138,12 +149,16 @@ def register(
     status_code=status.HTTP_202_ACCEPTED,
 )
 def start_signup(
+    request: Request,
     payload: SignupStartRequest,
     service: Annotated[
         AuthService,
         Depends(get_auth_service),
     ],
 ) -> SignupStartResponse:
+    remote_ip = request.headers.get("x-forwarded-for", "").split(",")[0].strip() or (request.client.host if request.client else "")
+    if not CaptchaVerifier(service.settings).verify(payload.captcha_token, remote_ip):
+        raise HTTPException(status_code=422, detail="Captcha verification failed")
     if not feature_enabled(
         service.session,
         "registration_enabled",
@@ -280,17 +295,24 @@ def complete_signup(
     response_model=TokenResponse,
 )
 def login(
+    request: Request,
     payload: LoginRequest,
     service: Annotated[
         AuthService,
         Depends(get_auth_service),
     ],
 ) -> TokenResponse:
+    remote_ip = request.headers.get("x-forwarded-for", "").split(",")[0].strip() or (request.client.host if request.client else "")
+    if not CaptchaVerifier(service.settings).verify(payload.captcha_token, remote_ip):
+        raise HTTPException(status_code=422, detail="Captcha verification failed")
     try:
         return service.login(
             payload.identifier,
             payload.password,
             payload.otp_code,
+            device_name=(request.headers.get("x-device-name") or request.headers.get("user-agent") or "دستگاه ناشناس")[:160],
+            user_agent=request.headers.get("user-agent", ""),
+            ip_address=remote_ip,
         )
 
     except TwoFactorRequiredError:
@@ -359,3 +381,39 @@ def logout(
     return Response(
         status_code=status.HTTP_204_NO_CONTENT,
     )
+
+
+@router.get("/sessions")
+def sessions(
+    user: Annotated[User, Depends(get_current_user)],
+    service: Annotated[AuthService, Depends(get_auth_service)],
+):
+    return service.sessions(user)
+
+
+@router.get("/security-events")
+def security_events(
+    user: Annotated[User, Depends(get_current_user)],
+    service: Annotated[AuthService, Depends(get_auth_service)],
+):
+    return service.security_events(user)
+
+
+@router.delete("/sessions/{session_id}", status_code=status.HTTP_204_NO_CONTENT)
+def revoke_session(
+    session_id: str,
+    user: Annotated[User, Depends(get_current_user)],
+    service: Annotated[AuthService, Depends(get_auth_service)],
+) -> Response:
+    if not service.revoke_session(user, session_id):
+        raise HTTPException(status_code=404, detail="نشست پیدا نشد.")
+    return Response(status_code=status.HTTP_204_NO_CONTENT)
+
+
+@router.delete("/sessions", status_code=status.HTTP_204_NO_CONTENT)
+def revoke_all_sessions(
+    user: Annotated[User, Depends(get_current_user)],
+    service: Annotated[AuthService, Depends(get_auth_service)],
+) -> Response:
+    service.revoke_other_sessions(user)
+    return Response(status_code=status.HTTP_204_NO_CONTENT)

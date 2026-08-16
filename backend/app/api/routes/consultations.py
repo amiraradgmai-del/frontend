@@ -35,6 +35,10 @@ class BookingRescheduleRequest(BaseModel):
     scheduled_at: datetime
 
 
+class BookingCancelRequest(BaseModel):
+    reason: str = Field(default="", max_length=1000)
+
+
 class ConsultantReviewRequest(BaseModel):
     rating: int = Field(ge=1, le=5)
     comment: str = Field(default="", max_length=1000)
@@ -86,7 +90,7 @@ def mine(user: Annotated[User, Depends(get_current_user)], service: Annotated[Co
 
 
 def profile_data(profile: ConsultantProfile, user: User) -> dict:
-    return {"id": profile.user_id, "slug": profile.slug, "full_name": user.full_name, "email": user.email, "consultant_type": profile.consultant_type, "professional_title": profile.professional_title, "bio": profile.bio, "specialties": profile.specialties, "skills": profile.skills, "qualifications": profile.qualifications, "education": profile.education, "certifications": profile.certifications, "work_history": profile.work_history, "weekly_schedule": profile.weekly_schedule, "profile_image_url": profile.profile_image_url, "years_experience": profile.years_experience, "rating": profile.rating, "review_count": profile.review_count, "consultation_price": profile.consultation_price, "city": profile.city, "office_address": profile.office_address, "is_online": profile.is_online, "offers_in_person": profile.offers_in_person, "is_verified": profile.is_verified, "is_available": profile.is_available, "account_active": user.is_active, "created_at": profile.created_at}
+    return {"id": profile.user_id, "slug": profile.slug, "full_name": user.full_name, "email": user.email, "consultant_type": profile.consultant_type, "professional_title": profile.professional_title, "bio": profile.bio, "specialties": profile.specialties, "skills": profile.skills, "qualifications": profile.qualifications, "education": profile.education, "certifications": profile.certifications, "work_history": profile.work_history, "weekly_schedule": profile.weekly_schedule, "profile_image_url": profile.profile_image_url, "years_experience": profile.years_experience, "rating": profile.rating, "review_count": profile.review_count, "consultation_price": profile.consultation_price, "city": profile.city, "office_address": profile.office_address, "is_online": profile.is_online, "offers_in_person": profile.offers_in_person, "is_verified": profile.is_verified, "is_available": profile.is_available, "boosted_until": profile.boosted_until, "account_active": user.is_active, "created_at": profile.created_at}
 
 
 def verification_data(item: ConsultantVerificationRequest, account: User) -> dict:
@@ -425,6 +429,42 @@ def deleted_consultant_profiles(
     return [profile_data(profile, account) | {"deleted_at": profile.deleted_at} for profile, account in rows]
 
 
+@router.post("/profile/boost")
+def boost_my_profile(
+    user: Annotated[User, Depends(require_permissions("consultations:handle"))],
+    session: Annotated[Session, Depends(get_session)],
+):
+    profile = session.get(ConsultantProfile, user.id)
+    if profile is None or not profile.is_verified or not profile.is_available:
+        raise HTTPException(422, "فقط پروفایل فعال و تأییدشده قابل ارتقا است.")
+    price = 99_000
+    wallet = session.get(WalletAccount, user.id)
+    if wallet is None or wallet.balance < price:
+        raise HTTPException(422, "موجودی کیف پول برای ارتقای هفت‌روزه کافی نیست.")
+    now = datetime.now(timezone.utc)
+    start = profile.boosted_until if profile.boosted_until and profile.boosted_until > now else now
+    profile.boosted_until = start + timedelta(days=7)
+    wallet.balance -= price
+    session.add(WalletTransaction(user_id=user.id, transaction_type="purchase", amount=price, status="completed", reference=f"BOOST-{uuid.uuid4().hex[:12].upper()}", related_type="consultant_boost", related_id=user.id, otp_hash="", otp_expires_at=now, processed_at=now))
+    session.add(AuditLog(actor_user_id=user.id, action="consultant.profile_boosted", resource_type="consultant_profile", resource_id=user.id, metadata_json={"price": price, "boosted_until": profile.boosted_until.isoformat()}))
+    session.commit()
+    return {"ok": True, "price": price, "boosted_until": profile.boosted_until, "wallet_balance": wallet.balance}
+
+
+@router.get("/manage/bookings")
+def manage_bookings(
+    actor: Annotated[User, Depends(require_permissions("consultations:manage"))],
+    session: Annotated[Session, Depends(get_session)],
+    booking_status: Annotated[str | None, Query(alias="status")] = None,
+):
+    del actor
+    statement = select(ConsultationBooking, User, ConsultantProfile).join(User, User.id == ConsultationBooking.user_id).join(ConsultantProfile, ConsultantProfile.user_id == ConsultationBooking.consultant_id).order_by(ConsultationBooking.scheduled_at.desc())
+    if booking_status:
+        statement = statement.where(ConsultationBooking.status == booking_status)
+    consultants = {item.user_id: session.get(User, item.user_id) for item in session.scalars(select(ConsultantProfile)).all()}
+    return [{"id": booking.id, "scheduled_at": booking.scheduled_at, "status": booking.status, "mode": booking.mode, "price": booking.price, "refund_amount": booking.refund_amount, "cancelled_by": booking.cancelled_by, "cancellation_reason": booking.cancellation_reason, "client": {"id": client.id, "full_name": client.full_name, "email": client.email}, "consultant": {"id": profile.user_id, "full_name": consultants[profile.user_id].full_name if consultants.get(profile.user_id) else profile.slug}} for booking, client, profile in session.execute(statement)]
+
+
 @router.patch("/manage/profiles/{consultant_id}")
 def update_consultant_profile(
     consultant_id: str,
@@ -560,7 +600,8 @@ def moderate_consultant_review(
 @router.get("/advisors")
 def advisors(session: Annotated[Session, Depends(get_session)], user: Annotated[User, Depends(get_current_user)], consultant_type: Annotated[str, Query(alias="type")] = "independent"):
     del user
-    rows = session.execute(select(ConsultantProfile, User).join(User, User.id == ConsultantProfile.user_id).where(ConsultantProfile.consultant_type == consultant_type, ConsultantProfile.is_verified.is_(True), ConsultantProfile.is_available.is_(True), ConsultantProfile.deleted_at.is_(None), (ConsultantProfile.blocked_until.is_(None) | (ConsultantProfile.blocked_until < datetime.now(timezone.utc)))).order_by(ConsultantProfile.rating.desc(), User.full_name))
+    now = datetime.now(timezone.utc)
+    rows = session.execute(select(ConsultantProfile, User).join(User, User.id == ConsultantProfile.user_id).where(ConsultantProfile.consultant_type == consultant_type, ConsultantProfile.is_verified.is_(True), ConsultantProfile.is_available.is_(True), ConsultantProfile.deleted_at.is_(None), (ConsultantProfile.blocked_until.is_(None) | (ConsultantProfile.blocked_until < now))).order_by((ConsultantProfile.boosted_until.is_not(None) & (ConsultantProfile.boosted_until > now)).desc(), ConsultantProfile.rating.desc(), User.full_name))
     return [profile_data(profile, account) for profile, account in rows]
 
 
@@ -584,7 +625,7 @@ def public_advisors(
             ),
             User.is_active.is_(True),
         )
-        .order_by(ConsultantProfile.rating.desc(), ConsultantProfile.review_count.desc())
+        .order_by((ConsultantProfile.boosted_until.is_not(None) & (ConsultantProfile.boosted_until > datetime.now(timezone.utc))).desc(), ConsultantProfile.rating.desc(), ConsultantProfile.review_count.desc())
         .limit(limit)
     )
     if city:
@@ -691,7 +732,7 @@ def reschedule_booking(booking_id: str, payload: BookingRescheduleRequest, user:
 
 
 @router.post("/bookings/{booking_id}/cancel")
-def cancel_booking(booking_id: str, user: Annotated[User, Depends(get_current_user)], session: Annotated[Session, Depends(get_session)]):
+def cancel_booking(booking_id: str, user: Annotated[User, Depends(get_current_user)], session: Annotated[Session, Depends(get_session)], payload: BookingCancelRequest = BookingCancelRequest()):
     booking = session.scalar(select(ConsultationBooking).where(ConsultationBooking.id == booking_id, ConsultationBooking.user_id == user.id))
     if booking is None or booking.status != "reserved":
         raise HTTPException(404, "رزرو فعال پیدا نشد")
@@ -705,6 +746,9 @@ def cancel_booking(booking_id: str, user: Annotated[User, Depends(get_current_us
         session.add(wallet)
     wallet.balance += refund
     booking.status = "cancelled"
+    booking.cancelled_by = "user"
+    booking.cancellation_reason = payload.reason.strip()
+    booking.refund_amount = refund
     reference = f"REFUND-{booking.id[:12].upper()}"
     session.add(WalletTransaction(user_id=user.id, transaction_type="refund", amount=refund, status="completed", reference=reference, related_type="consultation_booking", related_id=booking.id, otp_hash="", otp_expires_at=datetime.now(timezone.utc), processed_at=datetime.now(timezone.utc)))
     session.add(UserNotification(user_id=booking.consultant_id, title="رزرو لغو شد", message="کاربر جلسه رزروشده را لغو کرد.", notification_type="booking", action_url="/consultant"))
@@ -769,6 +813,17 @@ def update_consultant_booking(booking_id: str, payload: BookingStatusUpdate, use
         raise HTTPException(422, "این رزرو قبلاً تعیین تکلیف شده است")
     booking.status = payload.status
     booking.session_report = payload.session_report.strip()
+    if payload.status == "cancelled":
+        booking.cancelled_by = "consultant"
+        booking.cancellation_reason = payload.session_report.strip()
+        booking.refund_amount = booking.price
+        wallet = session.get(WalletAccount, booking.user_id)
+        if wallet is None:
+            wallet = WalletAccount(user_id=booking.user_id)
+            session.add(wallet)
+        wallet.balance += booking.price
+        now = datetime.now(timezone.utc)
+        session.add(WalletTransaction(user_id=booking.user_id, transaction_type="refund", amount=booking.price, status="completed", reference=f"REFUND-{booking.id[:12].upper()}", related_type="consultation_booking", related_id=booking.id, otp_hash="", otp_expires_at=now, processed_at=now))
     session.add(UserNotification(user_id=booking.user_id, title="وضعیت جلسه به‌روزرسانی شد", message="وضعیت رزرو شما توسط مشاور تغییر کرد.", notification_type="booking", action_url="/app/consultations/independent"))
     session.commit()
     return {"id": booking.id, "status": booking.status}

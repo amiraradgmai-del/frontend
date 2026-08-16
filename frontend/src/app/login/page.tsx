@@ -2,6 +2,7 @@
 
 import {
   FormEvent,
+  useCallback,
   useEffect,
   useRef,
   useState,
@@ -28,6 +29,7 @@ import {
   CardTitle,
 } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
+import { TurnstileCaptcha } from "@/components/turnstile-captcha";
 
 function normalizeIdentifier(value: string): string {
   const normalized = value
@@ -44,6 +46,10 @@ export default function LoginPage() {
   const [password, setPassword] = useState("");
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
+  const [captchaToken, setCaptchaToken] = useState("");
+  const [captchaRequired, setCaptchaRequired] = useState(false);
+  const [captchaReset, setCaptchaReset] = useState(0);
+  const captchaConfigured = useCallback((required: boolean) => setCaptchaRequired(required), []);
 
   const [showPassword, setShowPassword] =
     useState(false);
@@ -124,6 +130,11 @@ export default function LoginPage() {
       return;
     }
 
+    if (captchaRequired && !captchaToken) {
+      setError("تأیید امنیتی را انجام دهید.");
+      return;
+    }
+
     if (
       needsTwoFactor &&
       !/^\d{6}$/.test(otpCode)
@@ -148,11 +159,14 @@ export default function LoginPage() {
             identifier: normalizeIdentifier(identifier),
             password,
             otp_code: otpCode,
+            captcha_token: captchaToken,
           }),
         },
       );
 
       if (!response.ok) {
+        setCaptchaToken("");
+        setCaptchaReset((value) => value + 1);
         const payload = await response
           .json()
           .catch(() => null);
@@ -169,6 +183,11 @@ export default function LoginPage() {
               : "کد ۶ رقمی برنامه احراز هویت را وارد کنید.",
           );
 
+          return;
+        }
+
+        if (payload?.detail === "Captcha verification failed") {
+          setError("تأیید امنیتی نامعتبر یا منقضی شده است؛ دوباره انجام دهید.");
           return;
         }
 
@@ -394,11 +413,13 @@ export default function LoginPage() {
                 </p>
               )}
 
+              <TurnstileCaptcha onToken={setCaptchaToken} onConfigured={captchaConfigured} resetKey={captchaReset} />
+
               <Button
                 type="submit"
                 className="w-full"
                 size="lg"
-                disabled={loading}
+                disabled={loading || (captchaRequired && !captchaToken)}
               >
                 {loading ? (
                   "در حال ورود..."

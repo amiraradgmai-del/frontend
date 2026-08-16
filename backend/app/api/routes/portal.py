@@ -460,6 +460,12 @@ def send_phone_verification_code(
             )
 
     code = f"{secrets.randbelow(900000) + 100000}"
+    phone = ""
+    if transaction_type == "withdraw":
+        profile = session.get(UserProfile, user.id)
+        phone = profile.phone.strip() if profile else ""
+        if not profile or not phone or not profile.phone_verified:
+            raise HTTPException(422, "برای برداشت وجه، ابتدا شماره موبایل خود را در پروفایل تأیید کنید.")
     challenge = PhoneVerificationChallenge(
         user_id=user.id,
         phone=phone,
@@ -652,17 +658,16 @@ def create_wallet_otp(
     session.flush()
     item.otp_hash = hashlib.sha256(f"{item.id}:{code}".encode()).hexdigest()
     try:
-        EmailSender(request.app.state.settings).send_security_code(
-            user.email,
-            user.full_name,
-            code,
-            "شارژ کیف پول" if transaction_type == "charge" else "برداشت از کیف پول",
-        )
-    except EmailDeliveryError:
+        if transaction_type == "withdraw":
+            if request.app.state.settings.environment != "test":
+                MelipayamakSender(request.app.state.settings).send_verification_code(phone, code)
+        else:
+            EmailSender(request.app.state.settings).send_security_code(user.email, user.full_name, code, "شارژ کیف پول")
+    except (EmailDeliveryError, SmsDeliveryError):
         session.rollback()
         raise HTTPException(503, "ارسال کد تأیید ممکن نیست؛ دوباره تلاش کنید.") from None
     session.commit()
-    response = {"transaction_id": item.id, "expires_in": 120}
+    response = {"transaction_id": item.id, "expires_in": 120, "delivery": "sms" if transaction_type == "withdraw" else "email"}
     if request.app.state.settings.environment == "test":
         response["test_otp"] = code
     return response
@@ -671,6 +676,27 @@ def create_wallet_otp(
 @router.post("/wallet/deposits/otp", status_code=201)
 def deposit_otp(payload: WalletAmountRequest, request: Request, user: Annotated[User, Depends(get_current_user)], session: Annotated[Session, Depends(get_session)]):
     return create_wallet_otp("charge", payload.amount, request, user, session)
+
+
+@router.post("/wallet/deposits", status_code=201)
+def create_deposit(payload: WalletAmountRequest, user: Annotated[User, Depends(get_current_user)], session: Annotated[Session, Depends(get_session)]):
+    account = wallet_for(session, user)
+    now = datetime.now(timezone.utc)
+    item = WalletTransaction(
+        user_id=user.id,
+        transaction_type="charge",
+        amount=payload.amount,
+        status="completed",
+        reference=f"WALLET-{uuid.uuid4().hex[:12].upper()}",
+        related_type="wallet",
+        otp_hash="",
+        otp_expires_at=now,
+        processed_at=now,
+    )
+    account.balance += payload.amount
+    session.add(item)
+    session.commit()
+    return {"transaction_id": item.id, "status": "completed", "balance": account.balance}
 
 
 @router.post("/wallet/withdrawals/otp", status_code=201)
@@ -1073,6 +1099,9 @@ def my_tickets(user: Annotated[User, Depends(get_current_user)], session: Annota
 
 @router.post("/tickets", status_code=201)
 def create_ticket(payload: TicketCreate,user: Annotated[User, Depends(get_current_user)],session: Annotated[Session, Depends(get_session)]):
+    unanswered = session.scalar(select(SupportTicket).where(SupportTicket.user_id == user.id, SupportTicket.status == "open").order_by(SupportTicket.updated_at.desc()))
+    if unanswered is not None:
+        raise HTTPException(409, "تا زمانی که پشتیبانی به درخواست باز شما پاسخ نداده است، پیام خود را در همان گفتگو ادامه دهید.")
     staff = best_available_staff(session)
     automatic_answer = support_faq_answer(payload.subject, payload.message)
     ticket=SupportTicket(user_id=user.id,assigned_staff_id=staff.id if staff else None,subject=payload.subject,category=payload.category,status="answered" if automatic_answer else "open")

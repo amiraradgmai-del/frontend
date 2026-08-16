@@ -2,6 +2,7 @@
 
 import {
   FormEvent,
+  useCallback,
   useEffect,
   useRef,
   useState,
@@ -29,6 +30,7 @@ import {
   CardTitle,
 } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
+import { TurnstileCaptcha } from "@/components/turnstile-captcha";
 
 type Step = "details" | "verify" | "password";
 
@@ -45,6 +47,8 @@ const errorMessages: Record<string, string> = {
     "کد واردشده اشتباه یا منقضی شده است.",
   "Invalid or expired password setup token":
     "زمان تعیین رمز عبور تمام شده است؛ ثبت‌نام را دوباره شروع کنید.",
+  "Captcha verification failed":
+    "تأیید امنیتی نامعتبر یا منقضی شده است؛ دوباره انجام دهید.",
 };
 
 function getErrorMessage(error: unknown): string {
@@ -97,6 +101,10 @@ export default function SignupPage() {
 
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
+  const [captchaToken, setCaptchaToken] = useState("");
+  const [captchaRequired, setCaptchaRequired] = useState(false);
+  const [captchaReset, setCaptchaReset] = useState(0);
+  const captchaConfigured = useCallback((required: boolean) => setCaptchaRequired(required), []);
   const [resendSeconds, setResendSeconds] =
     useState(0);
 
@@ -169,6 +177,7 @@ export default function SignupPage() {
     setError("");
 
     if (!validateDetails()) return;
+    if (captchaRequired && !captchaToken) { setError("تأیید امنیتی را انجام دهید."); return; }
 
     setLoading(true);
 
@@ -184,6 +193,7 @@ export default function SignupPage() {
           email: email.trim() || null,
           referral_code:
             referralCode.trim().toUpperCase(),
+          captcha_token: captchaToken,
         }),
       });
 
@@ -191,6 +201,8 @@ export default function SignupPage() {
       setCode("");
       setStep("verify");
     } catch (requestError) {
+      setCaptchaToken("");
+      setCaptchaReset((value) => value + 1);
       setError(getErrorMessage(requestError));
     } finally {
       setLoading(false);
@@ -471,11 +483,13 @@ export default function SignupPage() {
                 />
               </label>
 
+              <TurnstileCaptcha onToken={setCaptchaToken} onConfigured={captchaConfigured} resetKey={captchaReset} />
+
               <Button
                 type="submit"
                 className="w-full"
                 size="lg"
-                disabled={loading}
+                disabled={loading || (captchaRequired && !captchaToken)}
               >
                 {loading ? (
                   "در حال ارسال..."

@@ -17,7 +17,7 @@ depends_on = None
 def upgrade() -> None:
     op.add_column(
         "consultant_verification_requests",
-        sa.Column("profile_payload", sa.JSON(), nullable=False, server_default=sa.text("'{}'::json")),
+        sa.Column("profile_payload", sa.JSON(), nullable=False, server_default=sa.text("'{}'")),
     )
 
 

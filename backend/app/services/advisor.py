@@ -52,6 +52,7 @@ FUZZY_DOMAIN_TERMS = {
     "مالیات", "مالیاتی", "اظهارنامه", "مؤدی", "مودیان", "معافیت",
     "جریمه", "دانش‌بنیان", "صورتحساب", "بخشودگی", "درآمد",
 }
+DIGIT_TRANSLATION = str.maketrans("۰۱۲۳۴۵۶۷۸۹٠١٢٣٤٥٦٧٨٩", "01234567890123456789")
 
 
 class ConversationNotFoundError(Exception):
@@ -83,6 +84,7 @@ class LawRecordSnapshot:
     article_number: str
     official_text: str
     keywords: str
+    source_url: str
 
 
 _law_index_cache: dict[str, tuple[float, list[tuple[LawRecordSnapshot, set[str], set[str], str]]]] = {}
@@ -139,36 +141,36 @@ class AdvisorService:
         if not query_terms:
             return []
         chunks = self.repository.active_chunks(as_of_date=as_of_date, topics=topics)
-        lexical_hits: list[SearchHit] = []
+        lexical_scores: dict[str, float] = {}
         indexed_chunks: list[tuple[DocumentChunk, set[str]]] = []
         for chunk in chunks:
-            chunk_terms = terms(chunk.content)
+            chunk_terms = terms(f"{chunk.section_title or ''} {chunk.article_number or ''} {chunk.content}")
             indexed_chunks.append((chunk, chunk_terms))
             overlap = query_terms & chunk_terms
             if overlap:
                 lexical_score = len(overlap) / len(query_terms) + len(overlap) / max(len(chunk_terms), 1)
                 if chunk.article_number and chunk.article_number in question:
                     lexical_score += 0.5
-                lexical_hits.append(SearchHit(chunk, min(lexical_score, 1.0)))
-        if lexical_hits:
-            return sorted(lexical_hits, key=lambda hit: hit.score, reverse=True)[:limit]
+                lexical_scores[chunk.id] = min(lexical_score, 1.0)
 
         query_vector = self.provider.embed_query(question)
-        if query_vector is None:
-            return []
-        semantic_hits = [
-            SearchHit(chunk, semantic_score)
-            for chunk, _chunk_terms in indexed_chunks
-            if chunk.embedding_json
-            and (semantic_score := cosine_similarity(query_vector, chunk.embedding_json)) > 0.35
-        ]
-        return sorted(semantic_hits, key=lambda hit: hit.score, reverse=True)[:limit]
+        combined: list[SearchHit] = []
+        for chunk, _chunk_terms in indexed_chunks:
+            lexical = lexical_scores.get(chunk.id, 0.0)
+            semantic = cosine_similarity(query_vector, chunk.embedding_json) if query_vector is not None and chunk.embedding_json else 0.0
+            if lexical <= 0 and semantic < 0.32:
+                continue
+            score = (0.68 * lexical) + (0.32 * max(semantic, 0.0)) if lexical else semantic
+            combined.append(SearchHit(chunk, min(score, 1.0)))
+        return sorted(combined, key=lambda hit: hit.score, reverse=True)[:limit]
 
     def search_law_records(self, question: str, limit: int = 8) -> list[LawHit]:
         query_terms = terms(question)
         if not query_terms:
             return []
-        normalized_question = normalize_persian(question).lower()
+        normalized_question = normalize_persian(question).lower().translate(DIGIT_TRANSLATION)
+        article_match = re.search(r"(?:ماده\s*)?(\d+)\s*(?:مکرر)?", normalized_question)
+        requested_article = article_match.group(1) if article_match and "ماده" in normalized_question else None
         if "ارث" in normalized_question:
             query_terms.update({"متوفی", "وراث", "فوت", "ماترک"})
         if any(term in normalized_question for term in ("وقف", "وصیت", "نذر", "حبس")):
@@ -225,10 +227,60 @@ class AdvisorService:
                     keyword_text,
                 ):
                     score += 0.5
-            if record.article_number and record.article_number in question:
-                score += 0.6
+            record_article = record.article_number.translate(DIGIT_TRANSLATION).strip()
+            if requested_article:
+                if record_article == requested_article:
+                    score += 0.9
+                else:
+                    continue
+            score += self._legal_intent_boost(
+                normalized_question,
+                record.law_name,
+                record_article,
+            )
             hits.append(LawHit(record=record, score=score))
         return sorted(hits, key=lambda hit: hit.score, reverse=True)[:limit]
+
+    @staticmethod
+    def _legal_intent_boost(
+        question: str,
+        law_name: str,
+        article_number: str,
+    ) -> float:
+        """Route common tax intents to their governing law sections.
+
+        This only ranks retrieved primary sources; it never manufactures a legal
+        answer. Article ranges deliberately include adjacent procedural articles
+        so amendments and cross references remain visible to the generator.
+        """
+        article_match = re.match(r"\d+", article_number)
+        article = int(article_match.group()) if article_match else None
+        direct_tax = "مالیات های مستقیم" in normalize_persian(law_name).replace("‌", " ")
+        terminals = "پایانه های فروشگاهی" in normalize_persian(law_name).replace("‌", " ")
+        vat = "ارزش افزوده" in law_name
+        boost = 0.0
+
+        if any(term in question for term in ("برگ تشخیص", "اعتراض", "ابلاغ")):
+            if direct_tax and article in {219, 238, 239, 244, 247, 251}:
+                boost += 0.9
+            elif direct_tax:
+                boost += 0.12
+        if any(term in question for term in ("حقوق", "کارمند", "کارفرما", "مزایای غیرنقدی", "اضافه کاری")):
+            if direct_tax and article is not None and 82 <= article <= 92:
+                boost += 1.0
+            elif direct_tax:
+                boost += 0.15
+        if any(term in question for term in ("هزینه قابل قبول", "هزینه های قابل قبول", "بدون فاکتور", "هزینه")):
+            if direct_tax and article is not None and 147 <= article <= 151:
+                boost += 1.0
+            elif direct_tax:
+                boost += 0.12
+        if any(term in question for term in ("صورتحساب", "سامانه مودیان", "شناسه کالا")):
+            if terminals:
+                boost += 0.45
+            if vat and any(term in question for term in ("اعتبار مالیاتی", "ارزش افزوده")):
+                boost += 0.3
+        return boost
 
     def _law_index(self) -> list[tuple[LawRecordSnapshot, set[str], set[str], str]]:
         database_key = str(self.session.get_bind().url)
@@ -252,6 +304,7 @@ class AdvisorService:
                 article_number=record.article_number,
                 official_text=record.official_text,
                 keywords=record.keywords,
+                source_url=record.source_url,
             )
             keyword_text = normalize_persian(snapshot.keywords).lower()
             keyword_terms = terms(keyword_text)
@@ -310,7 +363,7 @@ class AdvisorService:
             if should_search and not strong_curated_match and not strong_law_match
             else []
         )
-        selected = [hit for hit in hits if hit.score >= 0.12][:2]
+        selected = [hit for hit in hits if hit.score >= 0.12][:5]
         law_hits = candidate_law_hits if should_search and not selected else []
         if law_hits:
             minimum_law_score = max(0.48, law_hits[0].score - 0.18)
@@ -375,18 +428,18 @@ class AdvisorService:
             diverse_law_hits: list[LawHit] = []
             seen_articles: set[str] = set()
             for hit in law_hits:
-                article_key = hit.record.article_number.strip()
+                article_key = f"{hit.record.law_name.strip()}::{hit.record.article_number.strip()}"
                 if article_key and article_key in seen_articles:
                     continue
                 if article_key:
                     seen_articles.add(article_key)
                 diverse_law_hits.append(hit)
-                if len(diverse_law_hits) == 3:
+                if len(diverse_law_hits) == 5:
                     break
             law_hits = diverse_law_hits
             excerpts = [
                 (
-                    f"ماده {hit.record.article_number}\n"
+                    f"{hit.record.law_name}\n{hit.record.chapter}\nماده {hit.record.article_number}\n"
                     if hit.record.article_number
                     else ""
                 )
@@ -411,6 +464,8 @@ class AdvisorService:
                     chunk_id=hit.record.id,
                     article_number=hit.record.article_number,
                     score=round(min(1.0, hit.score), 3),
+                    source_title=hit.record.law_name.strip(),
+                    source_url=hit.record.source_url or None,
                 )
                 for hit in law_hits
             ]
@@ -449,6 +504,7 @@ class AdvisorService:
             )
             confidence = min(confidence, 0.5)
         answer = self._clean_legal_metadata(answer, show_article=self._asks_for_article(question))
+        answer = self._plain_text_answer(answer)
         answer = self._concise(answer)
         disclaimer = "" if answer_basis == "casual" else DISCLAIMER
         assistant = self.repository.add_message(conversation.id, "assistant", answer, confidence=confidence, needs_expert=rules.needs_expert, disclaimer=disclaimer)
@@ -459,7 +515,13 @@ class AdvisorService:
             if is_selected:
                 quote = self._quote(hit.chunk.content)
                 self.repository.add_citation(assistant.id, hit.chunk, quote, hit.score, rank)
-                citations.append(CitationResponse(chunk_id=hit.chunk.id, article_number=hit.chunk.article_number, score=round(hit.score, 3)))
+                citations.append(CitationResponse(
+                    chunk_id=hit.chunk.id,
+                    article_number=hit.chunk.article_number,
+                    score=round(hit.score, 3),
+                    source_title=hit.chunk.version.document.title,
+                    source_url=hit.chunk.version.document.source_url,
+                ))
         self.repository.touch(conversation)
         self.audit.add_audit("advisor.question_answered", "conversation", actor_user_id=user.id, resource_id=conversation.id, metadata={"citations": len(citations), "needs_expert": rules.needs_expert, "escalation_reasons": rules.escalation_reasons, "refusal_reason": rules.prohibited_reason, "answer_basis": answer_basis, "general_knowledge_weight": policy.general_knowledge_weight if answer_basis == "general_knowledge" else 0})
         self.session.commit()
@@ -480,8 +542,6 @@ class AdvisorService:
             f"{message.role}: {message.content[:350]}"
             for message in conversation.messages[-6:]
         ]
-        if not short_history:
-            short_history = [f"user: {item[:250]}" for item in self.repository.recent_user_messages(user.id, limit=3)]
         context = "\n".join((*profile_parts, *short_history))
         if not context:
             return question
@@ -535,7 +595,7 @@ class AdvisorService:
 
     @staticmethod
     def _quote(content: str) -> str:
-        return content.strip()[:500]
+        return content.strip()[:1200]
 
     @staticmethod
     def _answer_is_usable(answer: str | None, sources: list[str], question: str = "") -> bool:
@@ -589,12 +649,12 @@ class AdvisorService:
 
     @staticmethod
     def _asks_for_article(question: str) -> bool:
-        normalized = normalize_persian(question).lower()
+        normalized = normalize_persian(question).lower().translate(DIGIT_TRANSLATION)
         patterns = (
             "چه ماده", "کدام ماده", "شماره ماده", "ماده چند",
             "مربوط به چه ماده", "طبق چه ماده",
         )
-        return any(pattern in normalized for pattern in patterns)
+        return any(pattern in normalized for pattern in patterns) or bool(re.search(r"\bماده\s*\d+", normalized))
 
     @staticmethod
     def _is_broad_general_question(question: str) -> bool:
@@ -697,7 +757,20 @@ class AdvisorService:
         return re.sub(r"[ \t]{2,}", " ", cleaned).strip()
 
     @staticmethod
-    def _concise(text: str, max_chars: int = 450) -> str:
+    def _plain_text_answer(text: str) -> str:
+        """Remove presentation markup while preserving readable Persian text."""
+        cleaned = text.replace("\r\n", "\n")
+        cleaned = re.sub(r"(?m)^\s{0,3}#{1,6}\s*", "", cleaned)
+        cleaned = re.sub(r"(?m)^\s*[-*+]\s+", "", cleaned)
+        cleaned = re.sub(r"\*{1,3}([^*\n]+)\*{1,3}", r"\1", cleaned)
+        cleaned = re.sub(r"_{1,3}([^_\n]+)_{1,3}", r"\1", cleaned)
+        cleaned = re.sub(r"`{1,3}([^`\n]+)`{1,3}", r"\1", cleaned)
+        cleaned = re.sub(r"(?m)^\s*>\s?", "", cleaned)
+        cleaned = re.sub(r"\n{3,}", "\n\n", cleaned)
+        return cleaned.strip()
+
+    @staticmethod
+    def _concise(text: str, max_chars: int = 2400) -> str:
         cleaned = re.sub(r"[ \t]+", " ", text).strip()
         if len(cleaned) <= max_chars:
             return cleaned

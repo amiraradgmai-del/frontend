@@ -7,7 +7,7 @@ from app.core.config import Settings
 from app.db.base import Base
 from app.main import create_app
 from app.models.auth import Role, User
-from app.models.portal import DiscountCode, LawReferenceRecord, Payment, SubscriptionPlan, UserProfile, UserSubscription, WalletAccount
+from app.models.portal import DiscountCode, LawReferenceRecord, LegalCategory, Payment, SubscriptionPlan, UserProfile, UserSubscription, WalletAccount
 from app.models.site import ContentPage
 from app.repositories.auth import seed_rbac
 
@@ -61,6 +61,12 @@ def test_customer_profile_checkout_documents_and_tickets(portal_client):
     wallet_confirm = client.post("/api/v1/portal/wallet/confirm", headers=headers, json={"transaction_id": wallet_otp.json()["transaction_id"], "code": wallet_otp.json()["test_otp"]})
     assert wallet_confirm.status_code == 200, wallet_confirm.text
     assert wallet_confirm.json()["balance"] == 250000
+    with app.state.database.session() as session:
+        account = session.scalar(select(User).where(User.email == "portal@example.com"))
+        profile = session.get(UserProfile, account.id)
+        profile.phone = "09123456789"
+        profile.phone_verified = True
+        session.commit()
     withdraw_otp = client.post("/api/v1/portal/wallet/otp", headers=headers, json={"transaction_type": "withdraw", "amount": 50000})
     withdraw_confirm = client.post("/api/v1/portal/wallet/confirm", headers=headers, json={"transaction_id": withdraw_otp.json()["transaction_id"], "code": withdraw_otp.json()["test_otp"]})
     assert withdraw_confirm.json() == {"balance": 200000, "status": "pending"}
@@ -84,6 +90,9 @@ def test_customer_profile_checkout_documents_and_tickets(portal_client):
     ticket = client.post("/api/v1/portal/tickets", headers=headers, json={"subject": "پیگیری پرداخت", "category": "billing", "message": "لطفاً پرداخت من را بررسی کنید."})
     assert ticket.status_code == 201, ticket.text
     assert ticket.json()["messages"][0]["is_staff"] is False
+    duplicate_ticket = client.post("/api/v1/portal/tickets", headers=headers, json={"subject": "درخواست دوم", "category": "general", "message": "این درخواست باید تا زمان پاسخ مسدود باشد."})
+    assert duplicate_ticket.status_code == 409
+    assert "گفتگو" in duplicate_ticket.json()["detail"]
     blocked_reply = client.post(f"/api/v1/portal/tickets/{ticket.json()['id']}/messages", headers=headers, json={"message": "پیام دوم پیش از پاسخ مدیر"})
     assert blocked_reply.status_code == 200
     assert blocked_reply.json()["automatic_answer"] is False
@@ -113,6 +122,71 @@ def test_customer_profile_checkout_documents_and_tickets(portal_client):
     search = client.get("/api/v1/legal/search?q=ماده 2", headers=headers)
     assert search.status_code == 200
     assert search.json()[0]["article_number"] == "2"
+    assert len(search.json()[0]["suggested_questions"]) == 2
+
+
+def test_legal_categories_filter_records_and_every_record_has_questions(portal_client):
+    app, client = portal_client
+    headers = register(client, "legal-filter@example.com")
+    with app.state.database.session() as session:
+        direct = LegalCategory(id="category-direct", code="direct-tax", title="مالیات‌های مستقیم", sort_order=1)
+        vat = LegalCategory(id="category-vat", code="vat", title="مالیات بر ارزش افزوده", sort_order=2)
+        session.add_all([direct, vat])
+        session.flush()
+        session.add_all([
+            LawReferenceRecord(
+                id="LAW-DIRECT-238", source_id="LAW-DIRECT", law_name="قانون مالیات‌های مستقیم",
+                chapter="دادرسی مالیاتی", article_number="238", official_text="متن رسمی ماده ۲۳۸.",
+                keywords="اعتراض", category_id=direct.id, source_url="https://example.com/direct",
+            ),
+            LawReferenceRecord(
+                id="LAW-VAT-9", source_id="LAW-VAT", law_name="قانون مالیات بر ارزش افزوده",
+                chapter="اعتبار مالیاتی", article_number="9", official_text="متن رسمی ماده ۹.",
+                keywords="اعتبار", category_id=vat.id, source_url="https://example.com/vat",
+            ),
+        ])
+        session.commit()
+
+    categories = client.get("/api/v1/legal/categories", headers=headers)
+    assert categories.status_code == 200
+    counts = {item["id"]: item["law_count"] for item in categories.json()}
+    assert counts["category-direct"] >= 1
+    assert counts["category-vat"] >= 1
+
+    direct_results = client.get(
+        "/api/v1/legal/search?category_id=category-direct", headers=headers
+    )
+    assert direct_results.status_code == 200
+    assert direct_results.json()
+    assert all(item["category_title"] == "مالیات‌های مستقیم" for item in direct_results.json())
+    assert all(len(item["suggested_questions"]) == 2 for item in direct_results.json())
+    assert all(item["suggested_questions"][0]["question"] for item in direct_results.json())
+
+
+def test_unnumbered_legal_clauses_are_not_collapsed_and_have_clear_questions(portal_client):
+    app, client = portal_client
+    headers = register(client, "unnumbered-laws@example.com")
+    with app.state.database.session() as session:
+        session.add_all([
+            LawReferenceRecord(
+                id="BUDGET-CLAUSE-A", source_id="BUDGET", law_name="قانون بودجه سال آزمون",
+                chapter="بند الف", article_number="", official_text="حکم مستقل نخست بودجه.",
+                source_url="https://example.com/budget", keywords="بودجه", is_active=True,
+            ),
+            LawReferenceRecord(
+                id="BUDGET-CLAUSE-B", source_id="BUDGET", law_name="قانون بودجه سال آزمون",
+                chapter="بند ب", article_number="", official_text="حکم مستقل دوم بودجه.",
+                source_url="https://example.com/budget", keywords="بودجه", is_active=True,
+            ),
+        ])
+        session.commit()
+
+    response = client.get("/api/v1/legal/search?q=قانون بودجه سال آزمون", headers=headers)
+    assert response.status_code == 200
+    items = [item for item in response.json() if item["law_name"] == "قانون بودجه سال آزمون"]
+    assert len(items) == 2
+    assert all("ماده  " not in item["suggested_questions"][0]["question"] for item in items)
+    assert {item["chapter"] for item in items} == {"بند الف", "بند ب"}
 
 
 def test_profile_access_requirements_and_automatic_support_answer(portal_client):
@@ -239,7 +313,7 @@ def test_system_admin_can_manage_commerce_and_customer_data(portal_client):
 
 
 def test_wallet_daily_withdrawal_limit_is_enforced_on_backend(portal_client):
-    _app, client = portal_client
+    app, client = portal_client
     headers = register(client, "wallet-limit@example.com")
     charge = client.post(
         "/api/v1/portal/wallet/deposits/otp",
@@ -256,6 +330,16 @@ def test_wallet_daily_withdrawal_limit_is_enforced_on_backend(portal_client):
         },
     )
     assert confirmed_charge.json()["balance"] == 20_000_000
+
+    with app.state.database.session() as session:
+        account = session.scalar(select(User).where(User.email == "wallet-limit@example.com"))
+        profile = session.get(UserProfile, account.id)
+        if profile is None:
+            profile = UserProfile(user_id=account.id, referral_code=account.id.replace("-", "")[:10].upper())
+            session.add(profile)
+        profile.phone = "09123456780"
+        profile.phone_verified = True
+        session.commit()
 
     withdrawal = client.post(
         "/api/v1/portal/wallet/withdrawals/otp",

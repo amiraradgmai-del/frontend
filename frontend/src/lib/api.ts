@@ -28,6 +28,8 @@ const detailMessages: Record<string, string> = {
     "شماره موبایل، ایمیل یا رمز عبور صحیح نیست.",
   "Account is temporarily locked":
     "حساب به‌دلیل تلاش ناموفق موقتاً قفل شده است.",
+  "Captcha verification failed":
+    "تأیید امنیتی نامعتبر یا منقضی شده است؛ دوباره انجام دهید.",
   "Insufficient permissions":
     "شما اجازه انجام این عملیات را ندارید.",
   "User not found":

@@ -14,6 +14,8 @@ export type Citation = {
   chunk_id: string;
   article_number: string | null;
   score: number;
+  source_title: string;
+  source_url: string | null;
 };
 
 export type AskResponse = {

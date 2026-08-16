@@ -12,6 +12,7 @@ from app.models.auth import (
     PendingRegistration,
     Permission,
     RefreshToken,
+    SecurityRiskEvent,
     Role,
     User,
 )
@@ -87,16 +88,25 @@ def seed_rbac(session: Session) -> None:
         session.bind is not None
         and session.bind.dialect.name == "postgresql"
     ):
-        for table_name in ("permissions", "roles"):
-            session.execute(
-                text(
-                    "SELECT setval("
-                    f"pg_get_serial_sequence('{table_name}', 'id'), "
-                    "COALESCE(MAX(id), 1), "
-                    "MAX(id) IS NOT NULL"
-                    f") FROM {table_name}"
-                )
-            )
+        # Identifiers cannot be bound as SQL parameters. Keep these statements
+        # fully static instead of interpolating table names, even from a trusted
+        # internal list, so dynamic SQL cannot accidentally spread from here.
+        sequence_reset_statements = (
+            text(
+                "SELECT setval("
+                "pg_get_serial_sequence('permissions', 'id'), "
+                "COALESCE(MAX(id), 1), MAX(id) IS NOT NULL"
+                ") FROM permissions"
+            ),
+            text(
+                "SELECT setval("
+                "pg_get_serial_sequence('roles', 'id'), "
+                "COALESCE(MAX(id), 1), MAX(id) IS NOT NULL"
+                ") FROM roles"
+            ),
+        )
+        for statement in sequence_reset_statements:
+            session.execute(statement)
 
     permission_objects: dict[str, Permission] = {}
 
@@ -381,11 +391,20 @@ class AuthRepository:
         user_id: str,
         token_hash: str,
         expires_at: datetime,
+        *,
+        device_name: str = "دستگاه ناشناس",
+        user_agent: str = "",
+        ip_address: str = "",
+        last_used_at: datetime | None = None,
     ) -> RefreshToken:
         token = RefreshToken(
             user_id=user_id,
             token_hash=token_hash,
             expires_at=expires_at,
+            device_name=device_name,
+            user_agent=user_agent,
+            ip_address=ip_address,
+            last_used_at=last_used_at,
         )
         self.session.add(token)
         self.session.flush()
@@ -412,6 +431,26 @@ class AuthRepository:
         )
         return self.session.scalar(statement)
 
+    def active_sessions(self, user_id: str, now: datetime) -> list[RefreshToken]:
+        return list(self.session.scalars(
+            select(RefreshToken).where(
+                RefreshToken.user_id == user_id,
+                RefreshToken.revoked_at.is_(None),
+                RefreshToken.expires_at > now,
+            ).order_by(RefreshToken.last_used_at.desc(), RefreshToken.created_at.desc())
+        ))
+
+    def revoke_session(self, user_id: str, session_id: str, revoked_at: datetime) -> bool:
+        token = self.session.scalar(select(RefreshToken).where(
+            RefreshToken.id == session_id,
+            RefreshToken.user_id == user_id,
+            RefreshToken.revoked_at.is_(None),
+        ))
+        if token is None:
+            return False
+        token.revoked_at = revoked_at
+        return True
+
     def revoke_all_refresh_tokens(
         self,
         user_id: str,
@@ -427,3 +466,26 @@ class AuthRepository:
             )
             .values(revoked_at=revoked_at)
         )
+
+    def add_risk_event(
+        self,
+        category: str,
+        severity: str,
+        risk_score: int,
+        *,
+        user_id: str | None = None,
+        ip_address: str = "",
+        device_name: str = "",
+        details: dict[str, Any] | None = None,
+    ) -> SecurityRiskEvent:
+        event = SecurityRiskEvent(
+            user_id=user_id,
+            category=category,
+            severity=severity,
+            risk_score=max(0, min(100, risk_score)),
+            ip_address=ip_address[:64],
+            device_name=device_name[:160],
+            details_json=details or {},
+        )
+        self.session.add(event)
+        return event

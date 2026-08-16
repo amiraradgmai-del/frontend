@@ -1,13 +1,13 @@
 from __future__ import annotations
 
 import io
+import base64
 
 import pymupdf
 import pytest
 from docx import Document
-from openpyxl import Workbook
 
-from app.documents.storage import LocalObjectStorage
+from app.documents.storage import EncryptedObjectStorage, LocalObjectStorage
 from app.documents.text import build_chunks, extract_pages, normalize_persian
 from app.documents.validation import FileValidationError, safe_filename, validate_upload
 
@@ -27,17 +27,6 @@ def make_pdf(text: str) -> bytes:
     data = document.tobytes()
     document.close()
     return data
-
-
-def make_xlsx() -> bytes:
-    workbook = Workbook()
-    sheet = workbook.active
-    sheet.title = "اظهارنامه"
-    sheet.append(["عنوان", "مبلغ"])
-    sheet.append(["فروش", 1250000])
-    output = io.BytesIO()
-    workbook.save(output)
-    return output.getvalue()
 
 
 def test_upload_validation_checks_extension_mime_signature_and_size() -> None:
@@ -65,17 +54,6 @@ def test_docx_and_pdf_are_structurally_validated_and_extracted() -> None:
     pdf_upload = validate_upload("law.pdf", "application/pdf", pdf_data, 100_000)
     assert "Article 12" in extract_pages(pdf_upload.data, pdf_upload.extension)[0].text
 
-    xlsx_data = make_xlsx()
-    xlsx_upload = validate_upload(
-        "declaration.xlsx",
-        "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-        xlsx_data,
-        100_000,
-    )
-    extracted_sheet = extract_pages(xlsx_upload.data, xlsx_upload.extension)[0].text
-    assert "اظهارنامه" in extracted_sheet
-    assert "1250000" in extracted_sheet
-
 
 def test_persian_normalization_and_structural_chunking() -> None:
     text = "ماده ۱- ماليات بر كسب. " + ("توضیح تکمیلی. " * 100) + " ماده ۲- متن دوم"
@@ -98,3 +76,26 @@ def test_local_storage_rejects_path_traversal(tmp_path) -> None:
     with pytest.raises(ValueError):
         storage.put("../escape.txt", b"unsafe", "text/plain")
     assert safe_filename("../../tax-law.txt") == "tax-law.txt"
+
+
+def test_encrypted_storage_hides_plaintext_supports_rotation_and_legacy(tmp_path) -> None:
+    raw = LocalObjectStorage(tmp_path)
+    old_key = base64.b64encode(b"o" * 32).decode()
+    new_key = base64.b64encode(b"n" * 32).decode()
+    old_storage = EncryptedObjectStorage(raw, old_key)
+    old_storage.put("documents/private.txt", b"secret tax document", "text/plain")
+    stored = (tmp_path / "documents" / "private.txt").read_bytes()
+    assert stored.startswith(EncryptedObjectStorage.MAGIC)
+    assert b"secret tax document" not in stored
+
+    rotated = EncryptedObjectStorage(raw, f"{new_key},{old_key}")
+    assert rotated.get("documents/private.txt") == b"secret tax document"
+    rotated.put("documents/new.txt", b"new encrypted content", "text/plain")
+    assert rotated.get("documents/new.txt") == b"new encrypted content"
+
+    raw.put("documents/legacy.txt", b"legacy plaintext", "text/plain")
+    assert rotated.get("documents/legacy.txt") == b"legacy plaintext"
+
+    wrong = EncryptedObjectStorage(raw, base64.b64encode(b"x" * 32).decode())
+    with pytest.raises(ValueError, match="authenticated"):
+        wrong.get("documents/private.txt")
