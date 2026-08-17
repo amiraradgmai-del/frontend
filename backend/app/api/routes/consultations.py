@@ -1,4 +1,5 @@
 from typing import Annotated, Literal
+import re
 
 import uuid
 from datetime import datetime, timedelta, timezone
@@ -94,7 +95,13 @@ def mine(user: Annotated[User, Depends(get_current_user)], service: Annotated[Co
 
 
 def profile_data(profile: ConsultantProfile, user: User) -> dict:
-    return {"id": profile.user_id, "slug": profile.slug, "full_name": user.full_name, "email": user.email, "consultant_type": profile.consultant_type, "professional_title": profile.professional_title, "bio": profile.bio, "specialties": profile.specialties, "skills": profile.skills, "qualifications": profile.qualifications, "education": profile.education, "certifications": profile.certifications, "work_history": profile.work_history, "weekly_schedule": profile.weekly_schedule, "profile_image_url": profile.profile_image_url, "years_experience": profile.years_experience, "rating": profile.rating, "review_count": profile.review_count, "consultation_price": profile.consultation_price, "city": profile.city, "office_address": profile.office_address, "is_online": profile.is_online, "offers_in_person": profile.offers_in_person, "is_verified": profile.is_verified, "is_available": profile.is_available, "boosted_until": profile.boosted_until, "account_active": user.is_active, "created_at": profile.created_at}
+    return {"id": profile.user_id, "slug": profile.slug, "full_name": user.full_name, "email": user.email or "", "consultant_type": profile.consultant_type, "professional_title": profile.professional_title, "bio": profile.bio, "specialties": profile.specialties, "skills": profile.skills, "qualifications": profile.qualifications, "education": profile.education, "certifications": profile.certifications, "work_history": profile.work_history, "weekly_schedule": profile.weekly_schedule, "profile_image_url": profile.profile_image_url, "years_experience": profile.years_experience, "rating": profile.rating, "review_count": profile.review_count, "consultation_price": profile.consultation_price, "city": profile.city, "office_address": profile.office_address, "is_online": profile.is_online, "offers_in_person": profile.offers_in_person, "is_verified": profile.is_verified, "is_available": profile.is_available, "boosted_until": profile.boosted_until, "account_active": user.is_active, "created_at": profile.created_at}
+
+
+def consultant_slug(user: User) -> str:
+    source = user.email or getattr(user, "phone", None) or user.full_name or "consultant"
+    safe = re.sub(r"[^a-zA-Z0-9-]+", "-", source.split("@", 1)[0]).strip("-").lower()
+    return f"{(safe or 'consultant')[:40]}-{user.id[:8]}"
 
 
 def verification_data(item: ConsultantVerificationRequest, account: User) -> dict:
@@ -152,8 +159,13 @@ def request_verification(
             409,
             "یک درخواست فعال یا تأییدشده برای این حساب وجود دارد.",
         )
-    owned_documents = list(session.scalars(select(UserDocument).where(UserDocument.user_id == user.id, UserDocument.id.in_(payload.document_ids))).all()) if payload.document_ids else []
-    if {document.id for document in owned_documents} != set(payload.document_ids):
+    effective_document_ids = list(payload.document_ids)
+    existing_profile = session.get(ConsultantProfile, user.id)
+    if existing_profile is not None and not effective_document_ids:
+        previous_approved = session.scalar(select(ConsultantVerificationRequest).where(ConsultantVerificationRequest.user_id == user.id, ConsultantVerificationRequest.status == "approved").order_by(ConsultantVerificationRequest.updated_at.desc()))
+        effective_document_ids = list(previous_approved.document_ids) if previous_approved else []
+    owned_documents = list(session.scalars(select(UserDocument).where(UserDocument.user_id == user.id, UserDocument.id.in_(effective_document_ids))).all()) if effective_document_ids else []
+    if {document.id for document in owned_documents} != set(effective_document_ids):
         raise HTTPException(422, "یک یا چند مدرک انتخاب‌شده معتبر نیست.")
     required_types = REQUIRED_VERIFICATION_DOCUMENTS[payload.consultant_type]
     uploaded_types = {document.document_type for document in owned_documents if document.purpose == "consultant_verification"}
@@ -177,7 +189,7 @@ def request_verification(
         specialties=sorted(set(value.strip() for value in payload.specialties if value.strip())),
         years_experience=payload.years_experience,
         qualifications=payload.qualifications.strip(),
-        document_ids=payload.document_ids,
+        document_ids=effective_document_ids,
         applicant_note=payload.applicant_note.strip(),
         profile_payload={
             "bio": payload.bio.strip(),
@@ -403,7 +415,7 @@ def my_consultant_profile(
         )
         profile = ConsultantProfile(
             user_id=user.id,
-            slug=f"{user.email.split('@', 1)[0][:40]}-{user.id[:8]}",
+            slug=consultant_slug(user),
             consultant_type=consultant_type,
             professional_title=approved.professional_title if approved else "مشاور مالیاتی",
             bio=approved.qualifications if approved else "",

@@ -341,3 +341,25 @@ def test_public_advisor_directory_only_exposes_active_verified_profiles(
         client.get("/api/v1/consultations/public/advisors/hidden-advisor").status_code
         == 404
     )
+
+
+def test_email_less_consultant_profile_is_created_without_server_error(
+    consultation_client,
+):
+    app, client = consultation_client
+    headers = register(client, "phone-consultant@example.com")
+    with app.state.database.session() as session:
+        consultant = session.scalar(
+            select(User).where(User.email == "phone-consultant@example.com")
+        )
+        consultant.roles = [
+            session.scalar(select(Role).where(Role.name == "tax_expert"))
+        ]
+        consultant.phone = "09121234567"
+        consultant.email = None
+        session.commit()
+
+    response = client.get("/api/v1/consultations/profile/mine", headers=headers)
+    assert response.status_code == 200, response.text
+    assert response.json()["email"] == ""
+    assert response.json()["slug"].startswith("consultant-")

@@ -1,6 +1,6 @@
 "use client";
 
-import { FormEvent, useEffect, useState } from "react";
+import { FormEvent, useState } from "react";
 import { Building2, CheckCircle2, Download, Eye, EyeOff, FileSpreadsheet, Upload, UserPlus } from "lucide-react";
 import { api } from "@/lib/api";
 import { Button } from "@/components/ui/button";
@@ -123,8 +123,7 @@ export function ConsultantCreateForm() {
 }
 
 export default function CompanyConsultantsPage() {
-  useEffect(() => { window.location.replace("/support/consultant-approvals#add-consultant"); }, []);
-  return <p className="p-8 text-center text-sm text-slate-500">در حال انتقال به مدیریت مشاوران…</p>;
+  return <ConsultantCreateForm />;
 }
 
 function Section({ title, children }: { title: string; children: React.ReactNode }) { return <section><h2 className="mb-4 border-r-4 border-blue-500 pr-3 text-lg font-black">{title}</h2><div className="grid gap-4 sm:grid-cols-2">{children}</div></section>; }

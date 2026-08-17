@@ -9,6 +9,7 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
+import { ConsultantCreateForm } from "@/app/(app)/support/consultants/page";
 
 type Stats = { independent: number; company: number; pending: number; approved: number; rejected: number; correction_required: number; active: number; inactive: number };
 type Verification = { id: string; full_name: string; email: string; consultant_type: string; professional_title: string; specialties: string[]; years_experience: number; qualifications: string; status: string; admin_note: string; created_at: string; documents?: {id:string;title:string;document_type:string;description:string;status:string;download_url:string}[]; profile_payload?: { bio?: string; consultation_price?: number; city?: string; skills?: string[]; is_online?: boolean; offers_in_person?: boolean } };
@@ -113,7 +114,7 @@ export default function ConsultantManagementPage() {
     <header><p className="text-sm font-bold text-blue-600">مدیریت کامل مشاوران</p><h1 className="mt-1 text-3xl font-black">مشاوران و احراز صلاحیت</h1><p className="mt-2 text-slate-500">افزودن، ورود گروهی، تأیید، ویرایش و مدیریت مشاوران مستقل و شرکتی از یک صفحه.</p><div className="mt-4 flex flex-wrap gap-2"><a className="rounded-lg bg-blue-600 px-4 py-2 text-sm font-bold text-white" href="#add-consultant">افزودن یا ورود گروهی مشاور</a><a className="rounded-lg bg-emerald-600 px-4 py-2 text-sm font-bold text-white" href="/api/backend/api/v1/admin/export/consultants.xlsx">خروجی Excel مشاوران</a><a className="rounded-lg bg-rose-600 px-4 py-2 text-sm font-bold text-white" href="/api/backend/api/v1/admin/consultants-report.pdf">گزارش PDF مالی</a></div></header>
     <details id="add-consultant" className="scroll-mt-6 rounded-[2rem] border border-blue-100 bg-white p-4 shadow-sm open:p-6">
       <summary className="cursor-pointer list-none text-lg font-black text-blue-700">افزودن یا ورود گروهی مشاور</summary>
-      <div className="mt-6"><a href="/support/consultants" className="inline-flex rounded-xl bg-blue-600 px-4 py-3 text-sm font-bold text-white">ورود به فرم افزودن مشاور</a></div>
+      <div className="mt-6"><ConsultantCreateForm /></div>
     </details>
     <section className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4"><Metric label="مشاور مستقل" value={stats?.independent ?? 0} icon={UserRoundCheck} /><Metric label="مشاور شرکت" value={stats?.company ?? 0} icon={Building2} /><Metric label="در انتظار بررسی" value={stats?.pending ?? 0} icon={BadgeCheck} /><Metric label="مشاور فعال" value={stats?.active ?? 0} icon={Check} /></section>
     {message && <p className="rounded-xl bg-sky-50 p-3 text-sm text-sky-800">{message}</p>}
