@@ -79,6 +79,12 @@ class Settings(BaseSettings):
         le=1440,
     )
 
+    captcha_enabled: bool = False
+    turnstile_site_key: str | None = None
+    turnstile_secret_key: str | None = None
+    turnstile_verify_url: str = "https://challenges.cloudflare.com/turnstile/v0/siteverify"
+    turnstile_timeout_seconds: float = Field(default=5.0, ge=1.0, le=15.0)
+
     verification_code_minutes: int = Field(
         default=10,
         ge=2,
@@ -185,6 +191,7 @@ class Settings(BaseSettings):
     ] = "local"
 
     local_storage_path: str = "./storage"
+    storage_encryption_keys: str = ""
 
     s3_endpoint_url: str | None = None
     s3_bucket: str = "tax-ai-documents"

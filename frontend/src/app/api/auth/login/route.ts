@@ -5,7 +5,12 @@ export async function POST(request: Request) {
   try {
     const response = await fetch(`${backendUrl}/auth/login`, {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
+      headers: {
+        "Content-Type": "application/json",
+        "User-Agent": request.headers.get("user-agent") || "",
+        "X-Forwarded-For": request.headers.get("x-forwarded-for") || "",
+        "X-Device-Name": request.headers.get("sec-ch-ua-platform") || request.headers.get("user-agent") || "دستگاه ناشناس",
+      },
       body: await request.text(),
       cache: "no-store",
     });

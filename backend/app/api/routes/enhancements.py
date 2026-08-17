@@ -14,7 +14,7 @@ from sqlalchemy.orm import Session
 
 from app.api.dependencies import get_current_user, get_session, require_permissions
 from app.models.advisor import ChatMessage
-from app.models.auth import AuditLog, FailedLoginAttempt, User
+from app.models.auth import AuditLog, FailedLoginAttempt, SecurityRiskEvent, User
 from app.models.consultations import ConsultationBooking, ConsultantProfile, ConsultantSettlement
 from app.models.portal import Payment, ToolUsageEvent, UserNotification, UserSubscription, WalletAccount, WalletTransaction
 from app.models.site import SiteConfiguration
@@ -43,6 +43,10 @@ class SettlementReviewRequest(BaseModel):
     status: str = Field(pattern="^(paid|rejected)$")
     reference: str = Field(default="", max_length=100)
     admin_note: str = Field(default="", max_length=1000)
+
+
+class RiskReviewRequest(BaseModel):
+    status: str = Field(pattern=r"^(reviewing|resolved|false_positive)$")
 
 
 def notification_data(item: UserNotification) -> dict:
@@ -298,6 +302,41 @@ def audit_logs(
         }
         for item, email in rows
     ]
+
+
+@router.get("/admin/security-risk-events")
+def security_risk_events(
+    _: User = Depends(require_permissions("audit:read")),
+    session: Session = Depends(get_session),
+    status: str | None = None,
+):
+    query = select(SecurityRiskEvent, User.email).outerjoin(User, User.id == SecurityRiskEvent.user_id)
+    if status:
+        query = query.where(SecurityRiskEvent.status == status)
+    rows = session.execute(query.order_by(SecurityRiskEvent.created_at.desc()).limit(500)).all()
+    return [{
+        "id": item.id, "user_email": email, "category": item.category,
+        "severity": item.severity, "risk_score": item.risk_score,
+        "ip_address": item.ip_address, "device_name": item.device_name,
+        "details": item.details_json, "status": item.status, "created_at": item.created_at,
+    } for item, email in rows]
+
+
+@router.patch("/admin/security-risk-events/{event_id}")
+def review_security_risk_event(
+    event_id: str,
+    payload: RiskReviewRequest,
+    user: User = Depends(require_permissions("audit:read")),
+    session: Session = Depends(get_session),
+):
+    item = session.get(SecurityRiskEvent, event_id)
+    if item is None:
+        raise HTTPException(404, "رخداد امنیتی پیدا نشد.")
+    item.status = payload.status
+    item.resolved_by_user_id = user.id
+    item.resolved_at = datetime.now(timezone.utc) if payload.status in {"resolved", "false_positive"} else None
+    session.commit()
+    return {"id": item.id, "status": item.status, "resolved_at": item.resolved_at}
 
 
 @router.post("/admin/notifications/broadcast", status_code=201)

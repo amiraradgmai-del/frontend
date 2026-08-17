@@ -124,6 +124,7 @@ class ConsultantProfile(Base):
     contract_start: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     contract_end: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), index=True)
     contract_status: Mapped[str] = mapped_column(String(20), default="not_set", server_default="not_set", index=True)
+    boosted_until: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), index=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
 
 
@@ -186,6 +187,9 @@ class ConsultationBooking(Base):
     price: Mapped[int] = mapped_column(Integer, default=0)
     notes: Mapped[str] = mapped_column(Text, default="")
     session_report: Mapped[str] = mapped_column(Text, default="", server_default="")
+    cancelled_by: Mapped[str] = mapped_column(String(20), default="", server_default="")
+    cancellation_reason: Mapped[str] = mapped_column(Text, default="", server_default="")
+    refund_amount: Mapped[int] = mapped_column(Integer, default=0, server_default="0")
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
 
 

@@ -627,7 +627,7 @@ function UserShell({
             </Link>
             <ArticleDropdown compact />
             <Link
-              href="/laws"
+              href="/app/laws"
               className="hidden whitespace-nowrap px-2 text-xs font-bold text-slate-600 transition hover:text-blue-600 xl:block"
             >
               قوانین مالیاتی

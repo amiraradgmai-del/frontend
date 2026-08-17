@@ -1,7 +1,7 @@
 "use client";
 import { useMemo, useState } from "react";
 import { Input } from "@/components/ui/input";
-const IranCity = require("iran-city");
+import * as IranCity from "iran-city";
 type Item = { id: number; name: string };
 
 export function IranLocationFields({ city, onCityChange }: { city: string; onCityChange: (value: string) => void }) {

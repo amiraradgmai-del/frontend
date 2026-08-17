@@ -184,6 +184,10 @@ class RefreshToken(Base):
     replaced_by_id: Mapped[str | None] = mapped_column(
         String(36), ForeignKey("refresh_tokens.id", ondelete="SET NULL")
     )
+    device_name: Mapped[str] = mapped_column(String(160), default="دستگاه ناشناس", server_default="دستگاه ناشناس")
+    user_agent: Mapped[str] = mapped_column(String(500), default="", server_default="")
+    ip_address: Mapped[str] = mapped_column(String(64), default="", server_default="")
+    last_used_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=utc_now
     )
@@ -235,3 +239,25 @@ class AuditLog(Base):
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=utc_now
     )
+
+
+class SecurityRiskEvent(Base):
+    __tablename__ = "security_risk_events"
+    __table_args__ = (
+        CheckConstraint("severity IN ('low','medium','high','critical')", name="ck_security_risk_severity"),
+        CheckConstraint("status IN ('open','reviewing','resolved','false_positive')", name="ck_security_risk_status"),
+        Index("ix_security_risk_status_time", "status", "created_at"),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_uuid)
+    user_id: Mapped[str | None] = mapped_column(String(36), ForeignKey("users.id", ondelete="SET NULL"), index=True)
+    category: Mapped[str] = mapped_column(String(64), index=True)
+    severity: Mapped[str] = mapped_column(String(16))
+    risk_score: Mapped[int] = mapped_column(Integer)
+    ip_address: Mapped[str] = mapped_column(String(64), default="", server_default="")
+    device_name: Mapped[str] = mapped_column(String(160), default="", server_default="")
+    details_json: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict)
+    status: Mapped[str] = mapped_column(String(20), default="open", server_default="open", index=True)
+    resolved_by_user_id: Mapped[str | None] = mapped_column(String(36), ForeignKey("users.id", ondelete="SET NULL"))
+    resolved_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)

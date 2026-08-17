@@ -36,7 +36,7 @@ def wait_for_port(port: int, timeout: int = 25) -> None:
 
 
 def main() -> None:
-    stamp = datetime.now(timezone.utc).strftime("%Y%m%d-%H%M%S")
+    stamp = datetime.now(timezone.utc).strftime("%Y%m%d-%H%M%S-%f")
     work = HOME / f".release-{stamp}"
     backup = HOME / "backups" / f"chakah-{stamp}"
     work.mkdir()
@@ -59,6 +59,16 @@ def main() -> None:
         source = backend_release / name
         if source.exists():
             shutil.copy2(source, HOME / "backend" / name)
+
+    dependencies = subprocess.run(
+        [str(PYTHON), "-m", "pip", "install", "--disable-pip-version-check", "."],
+        cwd=HOME / "backend",
+        capture_output=True,
+        text=True,
+        timeout=300,
+    )
+    if dependencies.returncode:
+        raise RuntimeError(dependencies.stderr or dependencies.stdout)
 
     migration = subprocess.run(
         [str(PYTHON), "-m", "alembic", "upgrade", "head"],

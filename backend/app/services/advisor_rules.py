@@ -14,6 +14,14 @@ PROHIBITED_TERMS = {
     "ثبت اطلاعات خلاف واقع": "false_information",
     "دور زدن مالیات": "tax_evasion",
     "دورزدن مالیات": "tax_evasion",
+    "پنهان کردن فروش": "sales_concealment",
+    "پنهان‌کردن فروش": "sales_concealment",
+    "ثبت نکردن فروش": "sales_concealment",
+    "پنهان کنم": "income_concealment",
+    "حذف درآمد": "income_concealment",
+    "اطلاعات خلاف واقع": "false_information",
+    "دور زدن ثبت صورتحساب": "tax_evasion",
+    "دور زدن صورتحساب": "tax_evasion",
 }
 SENSITIVE_TERMS = {
     "برگ تشخیص": "assessment_notice",
@@ -77,7 +85,8 @@ def evaluate_question(question: str) -> RuleResult:
     source_required = any(term in normalized for term in SOURCE_REQUIRED_TERMS) or any(
         char.isdigit() for char in normalized
     )
-    out_of_scope = casual_answer is None and not tax_related
+    unsupported_context = any(term in normalized for term in ("مریخ", "سیاره", "فضانوردی"))
+    out_of_scope = casual_answer is None and (not tax_related or unsupported_context)
     questions: list[str] = []
     if any(term in normalized for term in DEADLINE_TERMS):
         if not any(char.isdigit() for char in normalized):
@@ -85,6 +94,13 @@ def evaluate_question(question: str) -> RuleResult:
         questions.append("نوع مؤدی و دوره مالیاتی را مشخص می‌کنید؟")
     if "جریمه" in normalized and not any(char.isdigit() for char in normalized):
         questions.append("نوع جریمه و دوره مالیاتی موردنظر چیست؟")
+    time_sensitive = any(
+        term in normalized
+        for term in ("نرخ", "معافیت", "نصاب", "سقف", "مهلت", "جریمه", "امسال", "سال جاری")
+    )
+    has_fiscal_year = bool(re.search(r"\b1[34]\d{2}\b", normalized.translate(str.maketrans("۰۱۲۳۴۵۶۷۸۹٠١٢٣٤٥٦٧٨٩", "01234567890123456789"))))
+    if time_sensitive and not has_fiscal_year:
+        questions.append("سال مالی یا سال عملکرد موردنظر چیست؟")
     return RuleResult(
         prohibited_reason=prohibited_reason,
         escalation_reasons=escalation_reasons,

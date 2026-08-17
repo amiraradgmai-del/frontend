@@ -5,7 +5,7 @@ import { ArrowLeft, BadgeCheck, MapPin, Search, Star, UserRoundSearch } from "lu
 import type { ConsultantProfile } from "@/lib/types";
 import { Badge } from "@/components/ui/badge";
 import { Input } from "@/components/ui/input";
-const IranCity = require("iran-city");
+import * as IranCity from "iran-city";
 type Location = { id: number; name: string; province_id?: number };
 
 export function AdvisorDirectory({ items }: { items: ConsultantProfile[] }) {

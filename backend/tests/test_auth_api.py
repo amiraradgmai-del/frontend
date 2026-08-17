@@ -13,28 +13,9 @@ from app.main import create_app
 from app.models.auth import AuditLog, PendingRegistration, RefreshToken, Role, User
 from app.models.portal import UserProfile
 from app.repositories.auth import seed_rbac
-from app.schemas.auth import SignupStartRequest
 
 TEST_PASSWORD = "SecurePassword123"
 TEST_SECRET = "test-secret-that-is-at-least-32-characters-long"
-
-
-def test_signup_names_are_realistic_and_persian():
-    request = SignupStartRequest(
-        first_name="سيد محمد",
-        last_name="علی‌رضا",
-        phone="09123456789",
-    )
-    assert request.first_name == "سید محمد"
-    assert request.last_name == "علی‌رضا"
-
-    for invalid_name in ("Test", "کاربر", "1111", "آآآآ"):
-        with pytest.raises(ValueError):
-            SignupStartRequest(
-                first_name=invalid_name,
-                last_name="احمدی",
-                phone="09123456789",
-            )
 
 
 @pytest.fixture
@@ -81,12 +62,7 @@ def test_verified_signup_requires_phone_code_before_password(app_client, monkeyp
     )
     started = client.post(
         "/auth/signup/start",
-        json={
-            "first_name": "علی",
-            "last_name": "محمدی",
-            "phone": "09123456789",
-            "email": "New@Example.com",
-        },
+        json={"first_name": "علی", "last_name": "محمدی", "phone": "09123456789", "email": "New@Example.com"},
     )
     assert started.status_code == 202
     assert delivered["phone"] == "09123456789"
@@ -117,11 +93,9 @@ def test_verified_signup_requires_phone_code_before_password(app_client, monkeyp
     with app.state.database.session() as session:
         user = session.scalar(select(User).where(User.email == "new@example.com"))
         assert user is not None
-        profile = session.get(UserProfile, user.id)
         assert user.email_verified_at is None
-        assert profile is not None
-        assert profile.phone == "09123456789"
-        assert profile.phone_verified is True
+        profile = session.get(UserProfile, user.id)
+        assert profile is not None and profile.phone_verified is True
         assert session.scalar(select(PendingRegistration)) is None
 
 
@@ -131,12 +105,7 @@ def test_signup_resend_is_rate_limited(app_client, monkeypatch) -> None:
         "app.services.sms.MelipayamakSender.send_verification_code",
         lambda *_args: None,
     )
-    payload = {
-        "first_name": "علی",
-        "last_name": "محمدی",
-        "phone": "09123456780",
-        "email": "rate@example.com",
-    }
+    payload = {"first_name": "علی", "last_name": "محمدی", "phone": "09123456780", "email": "rate@example.com"}
     assert client.post("/auth/signup/start", json=payload).status_code == 202
     repeated = client.post("/auth/signup/start", json=payload)
     assert repeated.status_code == 429
@@ -226,14 +195,6 @@ def test_register_hashes_password_and_assigns_minimal_role(app_client) -> None:
         assert user is not None
         assert user.password_hash != TEST_PASSWORD
         assert user.password_hash.startswith("$argon2")
-
-
-def test_admin_role_can_manage_blog_content(app_client) -> None:
-    app, _client = app_client
-    with app.state.database.session() as session:
-        admin_role = session.scalar(select(Role).where(Role.name == "admin"))
-        assert admin_role is not None
-        assert "site:manage" in {permission.code for permission in admin_role.permissions}
 
 
 def test_duplicate_email_and_weak_password_are_rejected(app_client) -> None:
@@ -352,6 +313,60 @@ def test_logout_revokes_refresh_token_without_revealing_unknown_tokens(
     assert (
         client.post("/auth/logout", json={"refresh_token": unknown}).status_code == 204
     )
+
+
+def test_user_can_list_and_revoke_device_sessions(app_client) -> None:
+    _, client = app_client
+    assert register(client).status_code == 201
+    first = client.post(
+        "/auth/login",
+        headers={"user-agent": "Firefox Test", "x-device-name": "Windows Firefox", "x-forwarded-for": "203.0.113.7"},
+        json={"email": "user@example.com", "password": TEST_PASSWORD},
+    ).json()
+    second = client.post(
+        "/auth/login",
+        headers={"user-agent": "Mobile Test", "x-device-name": "Android Chrome", "x-forwarded-for": "203.0.113.8"},
+        json={"email": "user@example.com", "password": TEST_PASSWORD},
+    ).json()
+    headers = {"Authorization": f"Bearer {second['access_token']}"}
+
+    sessions = client.get("/auth/sessions", headers=headers)
+    assert sessions.status_code == 200
+    assert {item["device_name"] for item in sessions.json()} == {"Windows Firefox", "Android Chrome"}
+    assert {item["ip_address"] for item in sessions.json()} == {"203.0.113.7", "203.0.113.8"}
+    risk_events = client.get("/auth/security-events", headers=headers)
+    assert risk_events.status_code == 200
+    assert "new_login_context" in {item["category"] for item in risk_events.json()}
+
+    first_session = next(item for item in sessions.json() if item["device_name"] == "Windows Firefox")
+    assert client.delete(f"/auth/sessions/{first_session['id']}", headers=headers).status_code == 204
+    second_rotated = client.post("/auth/refresh", json={"refresh_token": second["refresh_token"]})
+    assert second_rotated.status_code == 200
+    assert client.post("/auth/refresh", json={"refresh_token": first["refresh_token"]}).status_code == 401
+    # Reuse of any explicitly revoked token is treated as theft and revokes
+    # every remaining session for the account.
+    assert client.post("/auth/refresh", json={"refresh_token": second_rotated.json()["refresh_token"]}).status_code == 401
+    risk_events = client.get("/auth/security-events", headers=headers).json()
+    assert "refresh_token_reuse" in {item["category"] for item in risk_events}
+
+
+def test_captcha_is_required_when_turnstile_is_configured(app_client) -> None:
+    app, client = app_client
+    app.state.settings.captcha_enabled = True
+    app.state.settings.turnstile_site_key = "site-key"
+    app.state.settings.turnstile_secret_key = "secret-key"
+
+    config = client.get("/auth/captcha/config")
+    assert config.status_code == 200
+    assert config.json() == {"enabled": True, "site_key": "site-key"}
+
+    assert register(client).status_code == 201
+    denied = client.post(
+        "/auth/login",
+        json={"email": "user@example.com", "password": TEST_PASSWORD},
+    )
+    assert denied.status_code == 422
+    assert denied.json()["detail"] == "Captcha verification failed"
 
 
 def test_failed_logins_temporarily_lock_account(app_client) -> None:

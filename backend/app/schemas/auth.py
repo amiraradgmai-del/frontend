@@ -35,6 +35,7 @@ class SignupStartRequest(BaseModel):
     phone: str = Field(pattern=r"^09\d{9}$")
     email: EmailStr | None = None
     referral_code: str = Field(default="", max_length=16)
+    captcha_token: str = Field(default="", max_length=4096)
 
     @field_validator("first_name", "last_name")
     @classmethod
@@ -184,6 +185,7 @@ class LoginRequest(BaseModel):
         max_length=6,
         pattern=r"^$|^[0-9]{6}$",
     )
+    captcha_token: str = Field(default="", max_length=4096)
 
     @field_validator("identifier")
     @classmethod

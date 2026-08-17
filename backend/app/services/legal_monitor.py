@@ -6,6 +6,8 @@ import re
 import urllib.error
 import urllib.parse
 import urllib.request
+import ipaddress
+import socket
 from datetime import datetime, timezone
 
 import fitz
@@ -16,12 +18,53 @@ from app.models.portal import LegalExternalSource, LegalUpdateCandidate
 
 
 USER_AGENT = "ChakaLegalMonitor/1.0"
+MAX_SOURCE_BYTES = 12 * 1024 * 1024
+
+
+class _NoRedirect(urllib.request.HTTPRedirectHandler):
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        return None
+
+
+def validate_public_source_url(url: str) -> None:
+    parsed = urllib.parse.urlsplit(url)
+    if parsed.scheme != "https" or not parsed.hostname or parsed.username or parsed.password:
+        raise ValueError("Only public HTTPS legal sources are allowed")
+    try:
+        addresses = {item[4][0] for item in socket.getaddrinfo(parsed.hostname, parsed.port or 443)}
+    except socket.gaierror as error:
+        raise ValueError("Legal source hostname cannot be resolved") from error
+    for address in addresses:
+        ip = ipaddress.ip_address(address)
+        if not ip.is_global:
+            raise ValueError("Private or reserved legal source addresses are blocked")
 
 
 def fetch_bytes(url: str, timeout: float = 30.0) -> bytes:
-    request = urllib.request.Request(url, headers={"User-Agent": USER_AGENT})
-    with urllib.request.urlopen(request, timeout=timeout) as response:
-        return response.read()
+    opener = urllib.request.build_opener(_NoRedirect)
+    current = url
+    for _ in range(4):
+        validate_public_source_url(current)
+        request = urllib.request.Request(current, headers={"User-Agent": USER_AGENT})
+        try:
+            response = opener.open(request, timeout=timeout)
+        except urllib.error.HTTPError as error:
+            if error.code not in {301, 302, 303, 307, 308}:
+                raise
+            location = error.headers.get("Location")
+            if not location:
+                raise ValueError("Invalid legal source redirect") from error
+            current = urllib.parse.urljoin(current, location)
+            continue
+        with response:
+            length = int(response.headers.get("Content-Length") or 0)
+            if length > MAX_SOURCE_BYTES:
+                raise ValueError("Legal source is too large")
+            data = response.read(MAX_SOURCE_BYTES + 1)
+            if len(data) > MAX_SOURCE_BYTES:
+                raise ValueError("Legal source is too large")
+            return data
+    raise ValueError("Too many legal source redirects")
 
 
 def clean_title(page: str) -> str:

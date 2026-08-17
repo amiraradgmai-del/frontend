@@ -13,8 +13,12 @@ def upgrade() -> None:
     op.add_column("consultant_profiles", sa.Column("city", sa.String(80), nullable=False, server_default=""))
     op.add_column("consultant_profiles", sa.Column("office_address", sa.String(300), nullable=False, server_default=""))
     op.add_column("consultant_profiles", sa.Column("offers_in_person", sa.Boolean(), nullable=False, server_default=sa.true()))
-    op.drop_constraint("ck_consultation_bookings_mode", "consultation_bookings", type_="check")
-    op.create_check_constraint("ck_consultation_bookings_mode", "consultation_bookings", "mode IN ('online','in_person','phone')")
+    with op.batch_alter_table("consultation_bookings") as batch_op:
+        batch_op.drop_constraint("ck_consultation_bookings_mode", type_="check")
+        batch_op.create_check_constraint(
+            "ck_consultation_bookings_mode",
+            "mode IN ('online','in_person','phone')",
+        )
 
     profiles = sa.table("consultant_profiles", sa.column("slug", sa.String), sa.column("city", sa.String), sa.column("office_address", sa.String), sa.column("offers_in_person", sa.Boolean))
     bind = op.get_bind()
@@ -35,8 +39,12 @@ def upgrade() -> None:
 
 
 def downgrade() -> None:
-    op.drop_constraint("ck_consultation_bookings_mode", "consultation_bookings", type_="check")
-    op.create_check_constraint("ck_consultation_bookings_mode", "consultation_bookings", "mode IN ('online','phone')")
+    with op.batch_alter_table("consultation_bookings") as batch_op:
+        batch_op.drop_constraint("ck_consultation_bookings_mode", type_="check")
+        batch_op.create_check_constraint(
+            "ck_consultation_bookings_mode",
+            "mode IN ('online','phone')",
+        )
     op.drop_column("consultant_profiles", "offers_in_person")
     op.drop_column("consultant_profiles", "office_address")
     op.drop_column("consultant_profiles", "city")

@@ -15,6 +15,8 @@ class CitationResponse(BaseModel):
     chunk_id: str
     article_number: str | None
     score: float
+    source_title: str
+    source_url: str | None = None
 
 
 class AskResponse(BaseModel):

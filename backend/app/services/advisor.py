@@ -31,6 +31,7 @@ STOP_WORDS = {
     "چیست", "است", "شود", "تفاوت", "تکلیف", "تکالیف", "مالیاتی", "قانون",
     "چه", "چگونه", "کدام", "آیا", "ممکن", "امکان", "بررسی", "عمومی",
     "همزمان", "هم‌زمان", "مورد", "موارد", "دارد", "باشد", "کرده",
+    "حکم", "موضوع",
 }
 TERM_ALIASES = {
     "حریم": "جریمه",
@@ -52,6 +53,7 @@ FUZZY_DOMAIN_TERMS = {
     "مالیات", "مالیاتی", "اظهارنامه", "مؤدی", "مودیان", "معافیت",
     "جریمه", "دانش‌بنیان", "صورتحساب", "بخشودگی", "درآمد",
 }
+DIGIT_TRANSLATION = str.maketrans("۰۱۲۳۴۵۶۷۸۹٠١٢٣٤٥٦٧٨٩", "01234567890123456789")
 
 
 class ConversationNotFoundError(Exception):
@@ -83,6 +85,13 @@ class LawRecordSnapshot:
     article_number: str
     official_text: str
     keywords: str
+    source_url: str
+    source_type: str
+    legal_status: str
+    fiscal_year: int | None
+    effective_date: date | None
+    expiry_date: date | None
+    last_verified_at: datetime | None
 
 
 _law_index_cache: dict[str, tuple[float, list[tuple[LawRecordSnapshot, set[str], set[str], str]]]] = {}
@@ -139,41 +148,79 @@ class AdvisorService:
         if not query_terms:
             return []
         chunks = self.repository.active_chunks(as_of_date=as_of_date, topics=topics)
-        lexical_hits: list[SearchHit] = []
+        lexical_scores: dict[str, float] = {}
         indexed_chunks: list[tuple[DocumentChunk, set[str]]] = []
         for chunk in chunks:
-            chunk_terms = terms(chunk.content)
+            chunk_terms = terms(f"{chunk.section_title or ''} {chunk.article_number or ''} {chunk.content}")
             indexed_chunks.append((chunk, chunk_terms))
             overlap = query_terms & chunk_terms
             if overlap:
                 lexical_score = len(overlap) / len(query_terms) + len(overlap) / max(len(chunk_terms), 1)
                 if chunk.article_number and chunk.article_number in question:
                     lexical_score += 0.5
-                lexical_hits.append(SearchHit(chunk, min(lexical_score, 1.0)))
-        if lexical_hits:
-            return sorted(lexical_hits, key=lambda hit: hit.score, reverse=True)[:limit]
+                lexical_scores[chunk.id] = min(lexical_score, 1.0)
 
         query_vector = self.provider.embed_query(question)
-        if query_vector is None:
-            return []
-        semantic_hits = [
-            SearchHit(chunk, semantic_score)
-            for chunk, _chunk_terms in indexed_chunks
-            if chunk.embedding_json
-            and (semantic_score := cosine_similarity(query_vector, chunk.embedding_json)) > 0.35
-        ]
-        return sorted(semantic_hits, key=lambda hit: hit.score, reverse=True)[:limit]
+        combined: list[SearchHit] = []
+        for chunk, _chunk_terms in indexed_chunks:
+            lexical = lexical_scores.get(chunk.id, 0.0)
+            semantic = cosine_similarity(query_vector, chunk.embedding_json) if query_vector is not None and chunk.embedding_json else 0.0
+            if lexical <= 0 and semantic < 0.32:
+                continue
+            score = (0.68 * lexical) + (0.32 * max(semantic, 0.0)) if lexical else semantic
+            combined.append(SearchHit(chunk, min(score, 1.0)))
+        return sorted(combined, key=lambda hit: hit.score, reverse=True)[:limit]
 
-    def search_law_records(self, question: str, limit: int = 8) -> list[LawHit]:
+    def search_law_records(
+        self,
+        question: str,
+        limit: int = 8,
+        *,
+        as_of_date: date | None = None,
+    ) -> list[LawHit]:
         query_terms = terms(question)
         if not query_terms:
             return []
-        normalized_question = normalize_persian(question).lower()
+        normalized_question = normalize_persian(question).lower().translate(DIGIT_TRANSLATION)
+        requested_year_match = re.search(r"\b(1[34]\d{2})\b", normalized_question)
+        requested_year = int(requested_year_match.group(1)) if requested_year_match else None
+        target_date = as_of_date or date.today()
+        article_match = re.search(r"(?:ماده\s*)?(\d+(?:\s*مکرر)?)", normalized_question)
+        requested_article = (
+            re.sub(r"\s+", " ", article_match.group(1)).strip()
+            if article_match and "ماده" in normalized_question
+            else None
+        )
+        if "ماده واحده" in normalized_question:
+            requested_article = "واحده"
         if "ارث" in normalized_question:
             query_terms.update({"متوفی", "وراث", "فوت", "ماترک"})
         if any(term in normalized_question for term in ("وقف", "وصیت", "نذر", "حبس")):
             query_terms.update({"متولی", "وصی", "واقف"})
         indexed_records = self._law_index()
+        # Collapse duplicate imports of the same provision before scoring.
+        # PDF/Excel imports commonly create a short table-of-contents row and
+        # a second row containing the actual article.  Scoring both allows the
+        # heading to win on keyword density even though it has no legal rule.
+        deduplicated: dict[
+            tuple[str, str, int | None, str],
+            tuple[LawRecordSnapshot, set[str], set[str], str],
+        ] = {}
+        for indexed in indexed_records:
+            record = indexed[0]
+            if record.source_id == "curated-tax-qa" or not record.article_number.strip():
+                key = (record.id, "", record.fiscal_year, record.legal_status)
+            else:
+                key = (
+                    normalize_persian(record.law_name).replace("‌", " ").strip(),
+                    record.article_number.translate(DIGIT_TRANSLATION).strip(),
+                    record.fiscal_year,
+                    record.legal_status,
+                )
+            current = deduplicated.get(key)
+            if current is None or len(record.official_text.strip()) > len(current[0].official_text.strip()):
+                deduplicated[key] = indexed
+        indexed_records = list(deduplicated.values())
         document_frequency = {term: 0 for term in query_terms}
         for _record, record_terms, _keyword_terms, _keyword_text in indexed_records:
             for term in query_terms & record_terms:
@@ -186,10 +233,28 @@ class AdvisorService:
         asks_for_article = self._asks_for_article(question)
         hits: list[LawHit] = []
         for record, record_terms, keyword_terms, keyword_text in indexed_records:
+            if record.legal_status not in {"valid", "unknown"}:
+                continue
+            if record.effective_date and record.effective_date > target_date:
+                continue
+            if record.expiry_date and record.expiry_date < target_date:
+                continue
+            if requested_year and record.fiscal_year and record.fiscal_year != requested_year:
+                continue
             if (
                 record.source_id == "curated-tax-qa"
                 and self._is_ambiguous_curated_question(keyword_text)
                 and not asks_for_article
+            ):
+                continue
+            # Chapter/index rows imported from PDFs often contain only a
+            # heading and article number. They are not evidence for a topical
+            # legal answer. Keep them available only for an explicit article
+            # lookup, where the user can intentionally request that record.
+            if (
+                record.source_id != "curated-tax-qa"
+                and len(record.official_text.strip()) < 120
+                and not requested_article
             ):
                 continue
             overlap = query_terms & record_terms
@@ -217,6 +282,18 @@ class AdvisorService:
             ):
                 continue
             score = sum(term_weights[term] for term in overlap) / total_query_weight
+            score += 0.18 if record.source_type == "official" else 0.0
+            score -= 0.12 if record.legal_status == "unknown" else 0.0
+            # Imported legal datasets can contain both a chapter/index row and
+            # the full provision under the same article number.  A heading-only
+            # row is useful for navigation but must not outrank the legal text
+            # used to answer a taxpayer.
+            official_length = len(record.official_text.strip())
+            if record.source_id != "curated-tax-qa":
+                if official_length < 120:
+                    score -= 0.45
+                elif official_length >= 300:
+                    score += 0.12
             if keyword_terms:
                 if keyword_overlap >= 0.5 or keyword_similarity >= 0.65:
                     score += (0.45 * keyword_overlap) + (0.3 * keyword_similarity)
@@ -225,10 +302,77 @@ class AdvisorService:
                     keyword_text,
                 ):
                     score += 0.5
-            if record.article_number and record.article_number in question:
-                score += 0.6
+            record_article = re.sub(
+                r"\s+",
+                " ",
+                record.article_number.translate(DIGIT_TRANSLATION),
+            ).strip()
+            if requested_article:
+                if record_article == requested_article:
+                    score += 0.9
+                else:
+                    continue
+            score += self._legal_intent_boost(
+                normalized_question,
+                record.law_name,
+                record_article,
+            )
+            normalized_law_name = normalize_persian(record.law_name).lower().translate(DIGIT_TRANSLATION)
+            normalized_law_name = re.sub(r"\s+", " ", normalized_law_name).strip()
+            if normalized_law_name and normalized_law_name in normalized_question:
+                score += 1.5
             hits.append(LawHit(record=record, score=score))
-        return sorted(hits, key=lambda hit: hit.score, reverse=True)[:limit]
+        return sorted(
+            hits,
+            key=lambda hit: (hit.score, len(hit.record.official_text.strip())),
+            reverse=True,
+        )[:limit]
+
+    @staticmethod
+    def _legal_intent_boost(
+        question: str,
+        law_name: str,
+        article_number: str,
+    ) -> float:
+        """Route common tax intents to their governing law sections.
+
+        This only ranks retrieved primary sources; it never manufactures a legal
+        answer. Article ranges deliberately include adjacent procedural articles
+        so amendments and cross references remain visible to the generator.
+        """
+        article_match = re.match(r"\d+", article_number)
+        article = int(article_match.group()) if article_match else None
+        direct_tax = "مالیات های مستقیم" in normalize_persian(law_name).replace("‌", " ")
+        terminals = "پایانه های فروشگاهی" in normalize_persian(law_name).replace("‌", " ")
+        vat = "ارزش افزوده" in law_name
+        boost = 0.0
+
+        if any(term in question for term in ("برگ تشخیص", "اعتراض", "ابلاغ")):
+            if direct_tax and article in {219, 238, 239, 244, 247, 251}:
+                boost += 0.9
+            elif direct_tax:
+                boost += 0.12
+        if any(term in question for term in ("حقوق", "کارمند", "کارفرما", "مزایای غیرنقدی", "اضافه کاری")):
+            if direct_tax and article is not None and 82 <= article <= 92:
+                boost += 1.0
+            elif direct_tax:
+                boost += 0.15
+        if any(term in question for term in ("هزینه قابل قبول", "هزینه های قابل قبول", "بدون فاکتور", "هزینه")):
+            if direct_tax and article is not None and 147 <= article <= 151:
+                boost += 1.0
+            elif direct_tax:
+                boost += 0.12
+        if any(term in question for term in ("صورتحساب", "سامانه مودیان", "شناسه کالا")):
+            if terminals:
+                boost += 0.45
+            if vat and any(term in question for term in ("اعتبار مالیاتی", "ارزش افزوده")):
+                boost += 0.3
+        if any(term in question for term in ("وراث", "ارث", "فوت", "متوفی", "ماترک")):
+            if direct_tax and article is not None and 17 <= article <= 43:
+                boost += 1.25
+            elif direct_tax and article is not None:
+                boost -= 0.2
+        return boost
 
     def _law_index(self) -> list[tuple[LawRecordSnapshot, set[str], set[str], str]]:
         database_key = str(self.session.get_bind().url)
@@ -252,6 +396,17 @@ class AdvisorService:
                 article_number=record.article_number,
                 official_text=record.official_text,
                 keywords=record.keywords,
+                source_url=record.source_url,
+                source_type=(
+                    "practical"
+                    if record.source_id == "curated-tax-qa"
+                    else record.source_type
+                ),
+                legal_status=record.legal_status,
+                fiscal_year=record.fiscal_year,
+                effective_date=record.effective_date,
+                expiry_date=record.expiry_date,
+                last_verified_at=record.last_verified_at,
             )
             keyword_text = normalize_persian(snapshot.keywords).lower()
             keyword_terms = terms(keyword_text)
@@ -287,16 +442,22 @@ class AdvisorService:
         ai_question = self._question_with_memory(question, conversation, user)
         self.repository.add_message(conversation.id, "user", question)
         rules = evaluate_question(question)
+        mandatory_clarification = self._requires_period_clarification(
+            question, rules.clarifying_questions
+        )
         policy = get_ai_policy(self.session)
         concept_answer = self._concept_answer(question)
         broad_general = self._is_broad_general_question(question)
         should_search = not (
             rules.prohibited_reason
             or (rules.casual_answer and policy.casual_chat_enabled)
+            or mandatory_clarification
             or concept_answer
             or broad_general
         )
-        candidate_law_hits = self.search_law_records(question) if should_search else []
+        candidate_law_hits = self.search_law_records(
+            question, as_of_date=as_of_date
+        ) if should_search else []
         strong_curated_match = bool(
             candidate_law_hits
             and candidate_law_hits[0].record.source_id == "curated-tax-qa"
@@ -310,7 +471,7 @@ class AdvisorService:
             if should_search and not strong_curated_match and not strong_law_match
             else []
         )
-        selected = [hit for hit in hits if hit.score >= 0.12][:2]
+        selected = [hit for hit in hits if hit.score >= 0.12][:5]
         law_hits = candidate_law_hits if should_search and not selected else []
         if law_hits:
             minimum_law_score = max(0.48, law_hits[0].score - 0.18)
@@ -336,6 +497,10 @@ class AdvisorService:
             )
             confidence = 0.0
             answer_basis = "out_of_scope"
+        elif mandatory_clarification:
+            answer = "برای پاسخ معتبر، ابتدا سال مالی یا سال عملکرد موردنظر را مشخص کنید."
+            confidence = 0.0
+            answer_basis = "insufficient_source"
         elif concept_answer:
             answer = concept_answer
             confidence = 0.85
@@ -351,12 +516,17 @@ class AdvisorService:
         elif selected:
             excerpts = [self._source_excerpt(hit.chunk) for hit in selected]
             generated = self.provider.generate(ai_question, excerpts)
-            if not self._answer_is_usable(generated, excerpts, question):
+            generated = self._attach_sentence_citations(generated, excerpts)
+            provider_citations_valid = self._provider_citations_are_valid(generated, len(excerpts))
+            if not provider_citations_valid:
+                generated = None
+            if type(self.provider).__name__ != "AvalAIProvider" and not self._answer_is_usable(generated, excerpts, question):
                 generated = None
             answer = generated or self._general_fallback(question) or (
                 "اطلاعات بازیابی‌شده برای یک پاسخ کامل و قابل‌اعتماد کافی نیست؛ "
                 "لطفاً سؤال را دقیق‌تر بنویسید."
             )
+            answer = self._attach_sentence_citations(answer, excerpts) or answer
             confidence = round(sum(hit.score for hit in selected) / len(selected), 2)
             answer_basis = "dataset"
         elif law_hits:
@@ -375,18 +545,19 @@ class AdvisorService:
             diverse_law_hits: list[LawHit] = []
             seen_articles: set[str] = set()
             for hit in law_hits:
-                article_key = hit.record.article_number.strip()
+                article_key = f"{hit.record.law_name.strip()}::{hit.record.article_number.strip()}"
                 if article_key and article_key in seen_articles:
                     continue
                 if article_key:
                     seen_articles.add(article_key)
                 diverse_law_hits.append(hit)
-                if len(diverse_law_hits) == 3:
+                if len(diverse_law_hits) == 5:
                     break
             law_hits = diverse_law_hits
+            conflicting_sources = self._has_conflicting_law_sources(law_hits)
             excerpts = [
                 (
-                    f"ماده {hit.record.article_number}\n"
+                    f"{hit.record.law_name}\n{hit.record.chapter}\nماده {hit.record.article_number}\n"
                     if hit.record.article_number
                     else ""
                 )
@@ -394,10 +565,28 @@ class AdvisorService:
                 for hit in law_hits
             ]
             direct_answer = self._curated_answer(law_hits[0])
-            generated = direct_answer or self.provider.generate(ai_question, excerpts)
-            if not self._answer_is_usable(generated, excerpts, question):
+            if direct_answer:
+                direct_answer = f"{direct_answer.rstrip()} [S1]"
+            generated = None if conflicting_sources else (direct_answer or self.provider.generate(ai_question, excerpts))
+            generated = self._attach_sentence_citations(generated, excerpts)
+            provider_citations_valid = self._provider_citations_are_valid(generated, len(excerpts))
+            if direct_answer is None and not provider_citations_valid:
                 generated = None
-            answer = generated or self._general_fallback(question) or self._curated_sources_fallback(law_hits)
+            if type(self.provider).__name__ != "AvalAIProvider" and not self._answer_is_usable(generated, excerpts, question):
+                generated = None
+            # When legal sources were retrieved, a deterministic extract from
+            # those sources is safer than a generic topic explanation.  The
+            # latter can be broadly true while failing to answer the cited
+            # article (especially for procedural VAT provisions).
+            answer = (
+                generated
+                or self._curated_sources_fallback(law_hits)
+                or self._concise_sources(excerpts)
+                or self._general_fallback(question)
+            )
+            answer = self._attach_sentence_citations(answer, excerpts) or answer
+            if answer and not re.search(r"\[S\d+\]", answer):
+                answer = f"{answer.rstrip()} [S1]"
             if not answer and law_hits[0].score >= 0.72:
                 answer = self._concise_sources(excerpts)
             if not answer:
@@ -406,23 +595,22 @@ class AdvisorService:
                 min(1.0, sum(hit.score for hit in law_hits) / len(law_hits)), 2
             )
             answer_basis = "dataset"
+            if conflicting_sources:
+                answer = "منابع معتبر بازیابی‌شده درباره این موضوع با یکدیگر تعارض دارند؛ پاسخ قطعی ارائه نمی‌شود و بررسی کارشناس مالیاتی لازم است."
+                confidence = min(confidence, 0.25)
+                source_notice = "تعارض منبع شناسایی شد؛ وضعیت اعتبار و تاریخ منابع باید بررسی شود."
             law_citations = [
                 CitationResponse(
                     chunk_id=hit.record.id,
                     article_number=hit.record.article_number,
                     score=round(min(1.0, hit.score), 3),
+                    source_title=hit.record.law_name.strip(),
+                    source_url=hit.record.source_url or None,
                 )
                 for hit in law_hits
             ]
-        elif (
-            policy.general_knowledge_enabled
-            and policy.general_knowledge_weight > 0
-            and not rules.needs_expert
-        ):
-            generated = self._short_question_clarification(question) or (
-                self.provider.generate_general(ai_question)
-                or self._general_fallback(question)
-            )
+        elif policy.general_knowledge_enabled:
+            generated = self._short_question_clarification(question) or self._general_fallback(question)
             if generated:
                 answer = generated
                 confidence = round(policy.general_knowledge_weight / 100, 2)
@@ -449,6 +637,7 @@ class AdvisorService:
             )
             confidence = min(confidence, 0.5)
         answer = self._clean_legal_metadata(answer, show_article=self._asks_for_article(question))
+        answer = self._plain_text_answer(answer)
         answer = self._concise(answer)
         disclaimer = "" if answer_basis == "casual" else DISCLAIMER
         assistant = self.repository.add_message(conversation.id, "assistant", answer, confidence=confidence, needs_expert=rules.needs_expert, disclaimer=disclaimer)
@@ -459,7 +648,13 @@ class AdvisorService:
             if is_selected:
                 quote = self._quote(hit.chunk.content)
                 self.repository.add_citation(assistant.id, hit.chunk, quote, hit.score, rank)
-                citations.append(CitationResponse(chunk_id=hit.chunk.id, article_number=hit.chunk.article_number, score=round(hit.score, 3)))
+                citations.append(CitationResponse(
+                    chunk_id=hit.chunk.id,
+                    article_number=hit.chunk.article_number,
+                    score=round(hit.score, 3),
+                    source_title=hit.chunk.version.document.title,
+                    source_url=hit.chunk.version.document.source_url,
+                ))
         self.repository.touch(conversation)
         self.audit.add_audit("advisor.question_answered", "conversation", actor_user_id=user.id, resource_id=conversation.id, metadata={"citations": len(citations), "needs_expert": rules.needs_expert, "escalation_reasons": rules.escalation_reasons, "refusal_reason": rules.prohibited_reason, "answer_basis": answer_basis, "general_knowledge_weight": policy.general_knowledge_weight if answer_basis == "general_knowledge" else 0})
         self.session.commit()
@@ -480,12 +675,23 @@ class AdvisorService:
             f"{message.role}: {message.content[:350]}"
             for message in conversation.messages[-6:]
         ]
-        if not short_history:
-            short_history = [f"user: {item[:250]}" for item in self.repository.recent_user_messages(user.id, limit=3)]
         context = "\n".join((*profile_parts, *short_history))
         if not context:
             return question
         return f"زمینه کاربر و گفت‌وگو (فقط برای شخصی‌سازی؛ آن را تکرار نکن):\n{context}\n\nپرسش فعلی: {question}"
+
+    @staticmethod
+    def _requires_period_clarification(question: str, clarifications: list[str]) -> bool:
+        normalized = normalize_persian(question).lower().translate(DIGIT_TRANSLATION)
+        if re.search(r"\b1[34]\d{2}\b", normalized):
+            return False
+        time_sensitive = any(
+            term in normalized
+            for term in ("نرخ", "معافیت", "نصاب", "سقف", "امسال", "سال جاری")
+        )
+        word_count = len(re.findall(r"\w+", normalized))
+        generic_timing = any(term in normalized for term in ("مهلت", "جریمه")) and word_count <= 6
+        return (time_sensitive or generic_timing) and any("سال" in item for item in clarifications)
 
     def _conversation(self, conversation_id: str | None, question: str, user: User) -> Conversation:
         if conversation_id is None:
@@ -535,7 +741,7 @@ class AdvisorService:
 
     @staticmethod
     def _quote(content: str) -> str:
-        return content.strip()[:500]
+        return content.strip()[:1200]
 
     @staticmethod
     def _answer_is_usable(answer: str | None, sources: list[str], question: str = "") -> bool:
@@ -564,9 +770,61 @@ class AdvisorService:
             return False
         return True
 
+    def _provider_citations_are_valid(self, answer: str | None, source_count: int) -> bool:
+        if type(self.provider).__name__ != "AvalAIProvider":
+            return True
+        if not answer:
+            return False
+        references = [int(value) for value in re.findall(r"\[S(\d+)\]", answer)]
+        if not references or any(value < 1 or value > source_count for value in references):
+            return False
+        factual_markers = ("ماده", "تبصره", "نرخ", "درصد", "مهلت", "مشمول", "معاف", "موظف", "جریمه", "قانون")
+        factual_sentences = [
+            sentence.strip()
+            for sentence in re.split(r"[.!?ØŸ\n]+", answer)
+            if len(sentence.strip()) >= 24
+            and (
+                any(marker in sentence for marker in factual_markers)
+                or any(char.isdigit() for char in sentence)
+            )
+        ]
+        return all(re.search(r"\[S\d+\]", sentence) for sentence in factual_sentences)
+
+    @staticmethod
+    def _attach_sentence_citations(answer: str | None, sources: list[str]) -> str | None:
+        if not answer or not sources:
+            return answer
+        source_terms = [terms(source) for source in sources]
+        paragraphs: list[str] = []
+        for paragraph in answer.splitlines():
+            cleaned = paragraph.strip()
+            if not cleaned or re.search(r"\[S\d+\]", cleaned):
+                paragraphs.append(paragraph)
+                continue
+            paragraph_terms = terms(cleaned)
+            ranked = [len(paragraph_terms & item) for item in source_terms]
+            best = max(ranked, default=0)
+            if best > 0:
+                cleaned = f"{cleaned} [S{ranked.index(best) + 1}]"
+            paragraphs.append(cleaned)
+        return "\n".join(paragraphs)
+
+    @staticmethod
+    def _has_conflicting_law_sources(hits: list[LawHit]) -> bool:
+        official: dict[tuple[str, str], set[str]] = {}
+        for hit in hits:
+            record = hit.record
+            if record.source_type != "official" or record.legal_status != "valid":
+                continue
+            key = (normalize_persian(record.law_name).strip(), record.article_number.strip())
+            text = re.sub(r"\s+", " ", normalize_persian(record.official_text)).strip()
+            if key[1] and text:
+                official.setdefault(key, set()).add(text)
+        return any(len(texts) > 1 for texts in official.values())
+
     @staticmethod
     def _curated_answer(hit: LawHit) -> str | None:
-        if hit.record.source_id != "curated-tax-qa" or hit.score < 0.95:
+        if hit.record.source_id != "curated-tax-qa" or hit.score < 0.75:
             return None
         match = re.search(r"(?:^|\n)پاسخ:\s*(.+)", hit.record.official_text, re.DOTALL)
         return match.group(1).strip() if match else None
@@ -589,12 +847,12 @@ class AdvisorService:
 
     @staticmethod
     def _asks_for_article(question: str) -> bool:
-        normalized = normalize_persian(question).lower()
+        normalized = normalize_persian(question).lower().translate(DIGIT_TRANSLATION)
         patterns = (
             "چه ماده", "کدام ماده", "شماره ماده", "ماده چند",
             "مربوط به چه ماده", "طبق چه ماده",
         )
-        return any(pattern in normalized for pattern in patterns)
+        return any(pattern in normalized for pattern in patterns) or bool(re.search(r"\bماده\s*\d+", normalized))
 
     @staticmethod
     def _is_broad_general_question(question: str) -> bool:
@@ -697,7 +955,20 @@ class AdvisorService:
         return re.sub(r"[ \t]{2,}", " ", cleaned).strip()
 
     @staticmethod
-    def _concise(text: str, max_chars: int = 450) -> str:
+    def _plain_text_answer(text: str) -> str:
+        """Remove presentation markup while preserving readable Persian text."""
+        cleaned = text.replace("\r\n", "\n")
+        cleaned = re.sub(r"(?m)^\s{0,3}#{1,6}\s*", "", cleaned)
+        cleaned = re.sub(r"(?m)^\s*[-*+]\s+", "", cleaned)
+        cleaned = re.sub(r"\*{1,3}([^*\n]+)\*{1,3}", r"\1", cleaned)
+        cleaned = re.sub(r"_{1,3}([^_\n]+)_{1,3}", r"\1", cleaned)
+        cleaned = re.sub(r"`{1,3}([^`\n]+)`{1,3}", r"\1", cleaned)
+        cleaned = re.sub(r"(?m)^\s*>\s?", "", cleaned)
+        cleaned = re.sub(r"\n{3,}", "\n\n", cleaned)
+        return cleaned.strip()
+
+    @staticmethod
+    def _concise(text: str, max_chars: int = 2400) -> str:
         cleaned = re.sub(r"[ \t]+", " ", text).strip()
         if len(cleaned) <= max_chars:
             return cleaned
@@ -708,10 +979,22 @@ class AdvisorService:
     def _concise_sources(cls, sources: list[str]) -> str:
         summaries = []
         for source in sources[:2]:
-            body = source.split("\n", 1)[-1]
+            lines = source.splitlines()
+            # Law excerpts have three metadata lines (law, chapter, article)
+            # before the quoted provision.  Do not accidentally summarize
+            # those headings as though they were the legal answer.
+            if len(lines) >= 4 and lines[2].strip().startswith("ماده"):
+                body = "\n".join(lines[3:]).strip()
+            else:
+                body = source.split("\n", 1)[-1]
             sentences = [part.strip() for part in re.split(r"(?<=[.!؟])\s+|\n+", body) if part.strip()]
-            summary = " ".join(sentences[:2])
-            summaries.append(cls._concise(summary, 280))
+            chosen: list[str] = []
+            for sentence in sentences:
+                chosen.append(sentence)
+                if len(" ".join(chosen)) >= 220:
+                    break
+            summary = " ".join(chosen)
+            summaries.append(f"{cls._concise(summary, 280)} [S{len(summaries) + 1}]")
         return "\n\n".join(summaries)
 
     @classmethod

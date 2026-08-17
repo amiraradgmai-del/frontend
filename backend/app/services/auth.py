@@ -9,7 +9,7 @@ from sqlalchemy.orm import Session
 
 from app.core.config import Settings
 from app.core.security import SecurityManager
-from app.models.auth import PasswordResetToken, RefreshToken, User
+from app.models.auth import PasswordResetToken, RefreshToken, SecurityRiskEvent, User
 from app.models.portal import UserProfile
 from app.repositories.auth import AuthRepository
 from app.schemas.auth import TokenResponse, UserResponse
@@ -476,6 +476,10 @@ class AuthService:
         identifier: str,
         password: str,
         otp_code: str = "",
+        *,
+        device_name: str = "دستگاه ناشناس",
+        user_agent: str = "",
+        ip_address: str = "",
     ) -> TokenResponse:
         now = datetime.now(timezone.utc)
         normalized_identifier = identifier.strip()
@@ -512,6 +516,16 @@ class AuthService:
                 actor_user_id=user.id,
                 resource_id=user.id,
             )
+            if user.failed_login_count >= 2:
+                self.repository.add_risk_event(
+                    "repeated_login_failure",
+                    "high" if user.failed_login_count >= self.settings.max_failed_logins else "medium",
+                    min(90, 25 + user.failed_login_count * 15),
+                    user_id=user.id,
+                    ip_address=ip_address,
+                    device_name=device_name,
+                    details={"failed_attempts": user.failed_login_count},
+                )
             self.session.commit()
 
             if user.locked_until:
@@ -529,7 +543,28 @@ class AuthService:
         user.locked_until = None
         user.last_seen_at = now
 
-        response, _ = self._issue_tokens(user, now)
+        known_sessions = self.repository.active_sessions(user.id, now)
+        known_ips = {item.ip_address for item in known_sessions if item.ip_address}
+        known_devices = {item.device_name for item in known_sessions if item.device_name}
+        if known_sessions and (
+            (ip_address and ip_address not in known_ips)
+            or (device_name and device_name not in known_devices)
+        ):
+            self.repository.add_risk_event(
+                "new_login_context",
+                "medium",
+                45,
+                user_id=user.id,
+                ip_address=ip_address,
+                device_name=device_name,
+                details={
+                    "new_ip": bool(ip_address and ip_address not in known_ips),
+                    "new_device": bool(device_name and device_name not in known_devices),
+                },
+            )
+        response, _ = self._issue_tokens(
+            user, now, device_name=device_name, user_agent=user_agent, ip_address=ip_address
+        )
         self.repository.add_audit(
             "auth.login_succeeded",
             "user",
@@ -549,6 +584,15 @@ class AuthService:
 
         if stored.revoked_at is not None:
             self.repository.revoke_all_refresh_tokens(stored.user_id, now)
+            self.repository.add_risk_event(
+                "refresh_token_reuse",
+                "critical",
+                100,
+                user_id=stored.user_id,
+                ip_address=stored.ip_address,
+                device_name=stored.device_name,
+                details={"token_id": stored.id},
+            )
             self.repository.add_audit(
                 "auth.refresh_reuse_detected",
                 "refresh_token",
@@ -563,10 +607,17 @@ class AuthService:
             self.session.commit()
             raise InvalidRefreshTokenError
 
-        response, replacement = self._issue_tokens(stored.user, now)
+        response, replacement = self._issue_tokens(
+            stored.user,
+            now,
+            device_name=stored.device_name,
+            user_agent=stored.user_agent,
+            ip_address=stored.ip_address,
+        )
         stored.user.last_seen_at = now
         stored.revoked_at = now
         stored.replaced_by_id = replacement.id
+        stored.last_used_at = now
 
         self.repository.add_audit(
             "auth.refresh_rotated",
@@ -592,6 +643,63 @@ class AuthService:
                 resource_id=stored.id,
             )
             self.session.commit()
+
+    def sessions(self, user: User) -> list[dict[str, object]]:
+        now = datetime.now(timezone.utc)
+        return [
+            {
+                "id": item.id,
+                "device_name": item.device_name,
+                "ip_address": item.ip_address,
+                "created_at": item.created_at,
+                "last_used_at": item.last_used_at or item.created_at,
+                "expires_at": item.expires_at,
+            }
+            for item in self.repository.active_sessions(user.id, now)
+        ]
+
+    def security_events(self, user: User) -> list[dict[str, object]]:
+        items = self.session.scalars(
+            select(SecurityRiskEvent).where(SecurityRiskEvent.user_id == user.id)
+            .order_by(SecurityRiskEvent.created_at.desc()).limit(50)
+        )
+        return [{
+            "id": item.id,
+            "category": item.category,
+            "severity": item.severity,
+            "risk_score": item.risk_score,
+            "ip_address": item.ip_address,
+            "device_name": item.device_name,
+            "status": item.status,
+            "created_at": item.created_at,
+        } for item in items]
+
+    def revoke_session(self, user: User, session_id: str) -> bool:
+        now = datetime.now(timezone.utc)
+        revoked = self.repository.revoke_session(user.id, session_id, now)
+        if revoked:
+            self.repository.add_audit(
+                "auth.session_revoked", "refresh_token",
+                actor_user_id=user.id, resource_id=session_id,
+            )
+            self.session.commit()
+        return revoked
+
+    def revoke_other_sessions(self, user: User, keep_session_id: str | None = None) -> int:
+        now = datetime.now(timezone.utc)
+        sessions = self.repository.active_sessions(user.id, now)
+        revoked = 0
+        for item in sessions:
+            if keep_session_id and item.id == keep_session_id:
+                continue
+            item.revoked_at = now
+            revoked += 1
+        self.repository.add_audit(
+            "auth.other_sessions_revoked", "user",
+            actor_user_id=user.id, resource_id=user.id, metadata={"count": revoked},
+        )
+        self.session.commit()
+        return revoked
 
     def update_profile(
         self,
@@ -679,6 +787,10 @@ class AuthService:
         self,
         user: User,
         now: datetime,
+        *,
+        device_name: str = "دستگاه ناشناس",
+        user_agent: str = "",
+        ip_address: str = "",
     ) -> tuple[TokenResponse, RefreshToken]:
         access_token, expires_in = self.security.create_access_token(user.id)
         raw_refresh_token = self.security.new_refresh_token()
@@ -686,6 +798,10 @@ class AuthService:
             user.id,
             self.security.hash_refresh_token(raw_refresh_token),
             now + timedelta(days=self.settings.refresh_token_days),
+            device_name=device_name[:160] or "دستگاه ناشناس",
+            user_agent=user_agent[:500],
+            ip_address=ip_address[:64],
+            last_used_at=now,
         )
         return (
             TokenResponse(

@@ -197,6 +197,17 @@ def test_consultant_verification_approval_creates_profile_and_role(
         session.commit()
     manager_headers = login(client, "verification-manager@example.com")
 
+    document_ids = []
+    for document_type, title in (("national_card", "کارت ملی"), ("education_certificate", "مدرک تحصیلی"), ("resume", "رزومه")):
+        uploaded = client.post(
+            "/api/v1/portal/documents",
+            headers=applicant_headers,
+            data={"title": title, "document_type": document_type, "description": "مدرک آزمون احراز صلاحیت", "purpose": "consultant_verification", "intended_reviewer": "consultant_management"},
+            files={"file": (f"{document_type}.txt", b"verified document", "text/plain")},
+        )
+        assert uploaded.status_code == 201, uploaded.text
+        document_ids.append(uploaded.json()["id"])
+
     created = client.post(
         "/api/v1/consultations/verification",
         headers=applicant_headers,
@@ -208,7 +219,7 @@ def test_consultant_verification_approval_creates_profile_and_role(
             "specialties": ["مالیات مستقیم", "ارزش افزوده"],
             "years_experience": 8,
             "qualifications": "دارای سابقه حرفه‌ای در رسیدگی و دادرسی مالیاتی.",
-            "document_ids": [],
+            "document_ids": document_ids,
             "applicant_note": "درخواست بررسی صلاحیت",
         },
     )
@@ -250,6 +261,15 @@ def test_verification_rejection_requires_admin_explanation(consultation_client):
         ]
         session.commit()
     manager_headers = login(client, "correction-manager@example.com")
+    document_ids = []
+    for document_type, title in (("company_registration", "آگهی ثبت"), ("company_national_id", "شناسه ملی"), ("representative_card", "کارت نماینده")):
+        uploaded = client.post(
+            "/api/v1/portal/documents",
+            headers=applicant_headers,
+            data={"title": title, "document_type": document_type, "description": "مدرک شرکت", "purpose": "consultant_verification", "intended_reviewer": "consultant_management"},
+            files={"file": (f"{document_type}.txt", b"company document", "text/plain")},
+        )
+        document_ids.append(uploaded.json()["id"])
     created = client.post(
         "/api/v1/consultations/verification",
         headers=applicant_headers,
@@ -259,6 +279,7 @@ def test_verification_rejection_requires_admin_explanation(consultation_client):
             "specialties": ["مالیات شرکت‌ها"],
             "years_experience": 3,
             "qualifications": "سابقه فعالیت مالی و مالیاتی در شرکت‌های بازرگانی.",
+            "document_ids": document_ids,
         },
     ).json()
 
@@ -320,3 +341,25 @@ def test_public_advisor_directory_only_exposes_active_verified_profiles(
         client.get("/api/v1/consultations/public/advisors/hidden-advisor").status_code
         == 404
     )
+
+
+def test_email_less_consultant_profile_is_created_without_server_error(
+    consultation_client,
+):
+    app, client = consultation_client
+    headers = register(client, "phone-consultant@example.com")
+    with app.state.database.session() as session:
+        consultant = session.scalar(
+            select(User).where(User.email == "phone-consultant@example.com")
+        )
+        consultant.roles = [
+            session.scalar(select(Role).where(Role.name == "tax_expert"))
+        ]
+        consultant.phone = "09121234567"
+        consultant.email = None
+        session.commit()
+
+    response = client.get("/api/v1/consultations/profile/mine", headers=headers)
+    assert response.status_code == 200, response.text
+    assert response.json()["email"] == ""
+    assert response.json()["slug"].startswith("consultant-")

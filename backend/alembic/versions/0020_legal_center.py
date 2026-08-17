@@ -54,13 +54,21 @@ def upgrade() -> None:
     )
     op.create_index("ix_legal_update_candidates_source_id", "legal_update_candidates", ["source_id"])
     op.create_index("ix_legal_update_candidates_status", "legal_update_candidates", ["status"])
-    op.add_column("law_reference_records", sa.Column("category_id", sa.String(36), sa.ForeignKey("legal_categories.id", ondelete="SET NULL")))
-    op.add_column("law_reference_records", sa.Column("publication_date", sa.Date()))
-    op.add_column("law_reference_records", sa.Column("effective_date", sa.Date()))
-    op.add_column("law_reference_records", sa.Column("source_info", sa.String(500), nullable=False, server_default=""))
-    op.add_column("law_reference_records", sa.Column("is_active", sa.Boolean(), nullable=False, server_default=sa.true()))
-    op.add_column("law_reference_records", sa.Column("archived_at", sa.DateTime(timezone=True)))
-    op.add_column("law_reference_records", sa.Column("updated_at", sa.DateTime(timezone=True), nullable=False, server_default=sa.func.now()))
+    with op.batch_alter_table("law_reference_records") as batch_op:
+        batch_op.add_column(sa.Column("category_id", sa.String(36)))
+        batch_op.add_column(sa.Column("publication_date", sa.Date()))
+        batch_op.add_column(sa.Column("effective_date", sa.Date()))
+        batch_op.add_column(sa.Column("source_info", sa.String(500), nullable=False, server_default=""))
+        batch_op.add_column(sa.Column("is_active", sa.Boolean(), nullable=False, server_default=sa.true()))
+        batch_op.add_column(sa.Column("archived_at", sa.DateTime(timezone=True)))
+        batch_op.add_column(sa.Column("updated_at", sa.DateTime(timezone=True), nullable=False, server_default=sa.func.now()))
+        batch_op.create_foreign_key(
+            "fk_law_reference_records_category_id",
+            "legal_categories",
+            ["category_id"],
+            ["id"],
+            ondelete="SET NULL",
+        )
     op.create_index("ix_law_reference_records_category_id", "law_reference_records", ["category_id"])
     op.create_index("ix_law_reference_records_is_active", "law_reference_records", ["is_active"])
     categories = [
@@ -80,8 +88,9 @@ def upgrade() -> None:
 def downgrade() -> None:
     op.drop_index("ix_law_reference_records_is_active", table_name="law_reference_records")
     op.drop_index("ix_law_reference_records_category_id", table_name="law_reference_records")
-    for column in ("updated_at", "archived_at", "is_active", "source_info", "effective_date", "publication_date", "category_id"):
-        op.drop_column("law_reference_records", column)
+    with op.batch_alter_table("law_reference_records") as batch_op:
+        for column in ("updated_at", "archived_at", "is_active", "source_info", "effective_date", "publication_date", "category_id"):
+            batch_op.drop_column(column)
     op.drop_table("legal_update_candidates")
     op.drop_table("legal_external_sources")
     op.drop_table("legal_categories")

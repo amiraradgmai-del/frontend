@@ -1,9 +1,10 @@
 from typing import Annotated, Literal
+import re
 
 import uuid
 from datetime import datetime, timedelta, timezone
 
-from fastapi import APIRouter, Depends, File, HTTPException, Query, Request, UploadFile, status
+from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, Request, UploadFile, status
 from fastapi.responses import StreamingResponse
 from io import BytesIO
 from openpyxl import Workbook, load_workbook
@@ -14,6 +15,8 @@ from sqlalchemy.orm import Session
 
 from app.api.dependencies import get_consultation_service, get_current_user, get_security, get_session, require_permissions
 from app.core.security import SecurityManager
+from app.documents.storage import ObjectStorage
+from app.documents.validation import FileValidationError, validate_upload
 from app.models.auth import AuditLog, Role, User
 from app.models.consultations import ConsultationBooking, ConsultantProfile, ConsultantReview, ConsultantSettlement, ConsultantVerificationRequest, ConsultationRequest
 from app.models.portal import UserDocument, UserNotification, UserProfile, WalletAccount, WalletTransaction
@@ -24,6 +27,10 @@ from app.services.site import feature_enabled
 from app.services.email import EmailDeliveryError, EmailSender
 
 router = APIRouter(prefix="/api/v1/consultations", tags=["consultations"])
+REQUIRED_VERIFICATION_DOCUMENTS = {
+    "independent": {"national_card", "education_certificate", "resume"},
+    "company": {"company_registration", "company_national_id", "representative_card"},
+}
 
 
 class BookingStatusUpdate(BaseModel):
@@ -33,6 +40,10 @@ class BookingStatusUpdate(BaseModel):
 
 class BookingRescheduleRequest(BaseModel):
     scheduled_at: datetime
+
+
+class BookingCancelRequest(BaseModel):
+    reason: str = Field(default="", max_length=1000)
 
 
 class ConsultantReviewRequest(BaseModel):
@@ -60,6 +71,9 @@ class CompanyConsultantCreate(BaseModel):
     specialties: list[str] = Field(min_length=1, max_length=20)
     skills: list[str] = Field(default_factory=list, max_length=20)
     qualifications: str = Field(default="", max_length=2000)
+    education: str = Field(default="", max_length=2000)
+    certifications: str = Field(default="", max_length=2000)
+    work_history: str = Field(default="", max_length=3000)
     years_experience: int = Field(default=0, ge=0, le=70)
     consultation_price: int = Field(default=0, ge=0, le=1_000_000_000)
     city: str = Field(default="", max_length=80)
@@ -68,6 +82,7 @@ class CompanyConsultantCreate(BaseModel):
     is_online: bool = True
     offers_in_person: bool = False
     is_available: bool = True
+    approval_status: Literal["approved", "pending"] = "approved"
 
 
 @router.post("", response_model=ConsultationResponse, status_code=status.HTTP_201_CREATED)
@@ -86,7 +101,13 @@ def mine(user: Annotated[User, Depends(get_current_user)], service: Annotated[Co
 
 
 def profile_data(profile: ConsultantProfile, user: User) -> dict:
-    return {"id": profile.user_id, "slug": profile.slug, "full_name": user.full_name, "email": user.email, "consultant_type": profile.consultant_type, "professional_title": profile.professional_title, "bio": profile.bio, "specialties": profile.specialties, "skills": profile.skills, "qualifications": profile.qualifications, "education": profile.education, "certifications": profile.certifications, "work_history": profile.work_history, "weekly_schedule": profile.weekly_schedule, "profile_image_url": profile.profile_image_url, "years_experience": profile.years_experience, "rating": profile.rating, "review_count": profile.review_count, "consultation_price": profile.consultation_price, "city": profile.city, "office_address": profile.office_address, "is_online": profile.is_online, "offers_in_person": profile.offers_in_person, "is_verified": profile.is_verified, "is_available": profile.is_available, "account_active": user.is_active, "created_at": profile.created_at}
+    return {"id": profile.user_id, "slug": profile.slug, "full_name": user.full_name, "email": user.email or "", "consultant_type": profile.consultant_type, "professional_title": profile.professional_title, "bio": profile.bio, "specialties": profile.specialties, "skills": profile.skills, "qualifications": profile.qualifications, "education": profile.education, "certifications": profile.certifications, "work_history": profile.work_history, "weekly_schedule": profile.weekly_schedule, "profile_image_url": profile.profile_image_url, "years_experience": profile.years_experience, "rating": profile.rating, "review_count": profile.review_count, "consultation_price": profile.consultation_price, "city": profile.city, "office_address": profile.office_address, "is_online": profile.is_online, "offers_in_person": profile.offers_in_person, "is_verified": profile.is_verified, "is_available": profile.is_available, "boosted_until": profile.boosted_until, "account_active": user.is_active, "created_at": profile.created_at}
+
+
+def consultant_slug(user: User) -> str:
+    source = user.email or getattr(user, "phone", None) or user.full_name or "consultant"
+    safe = re.sub(r"[^a-zA-Z0-9-]+", "-", source.split("@", 1)[0]).strip("-").lower()
+    return f"{(safe or 'consultant')[:40]}-{user.id[:8]}"
 
 
 def verification_data(item: ConsultantVerificationRequest, account: User) -> dict:
@@ -144,17 +165,27 @@ def request_verification(
             409,
             "یک درخواست فعال یا تأییدشده برای این حساب وجود دارد.",
         )
-    if payload.document_ids:
-        owned_documents = set(
-            session.scalars(
-                select(UserDocument.id).where(
-                    UserDocument.user_id == user.id,
-                    UserDocument.id.in_(payload.document_ids),
-                )
-            ).all()
-        )
-        if owned_documents != set(payload.document_ids):
-            raise HTTPException(422, "یک یا چند مدرک انتخاب‌شده معتبر نیست.")
+    effective_document_ids = list(payload.document_ids)
+    existing_profile = session.get(ConsultantProfile, user.id)
+    if existing_profile is not None and not effective_document_ids:
+        previous_approved = session.scalar(select(ConsultantVerificationRequest).where(ConsultantVerificationRequest.user_id == user.id, ConsultantVerificationRequest.status == "approved").order_by(ConsultantVerificationRequest.updated_at.desc()))
+        effective_document_ids = list(previous_approved.document_ids) if previous_approved else []
+    owned_documents = list(session.scalars(select(UserDocument).where(UserDocument.user_id == user.id, UserDocument.id.in_(effective_document_ids))).all()) if effective_document_ids else []
+    if {document.id for document in owned_documents} != set(effective_document_ids):
+        raise HTTPException(422, "یک یا چند مدرک انتخاب‌شده معتبر نیست.")
+    required_types = REQUIRED_VERIFICATION_DOCUMENTS[payload.consultant_type]
+    uploaded_types = {document.document_type for document in owned_documents if document.purpose == "consultant_verification"}
+    missing_types = sorted(required_types - uploaded_types)
+    if missing_types:
+        labels = {
+            "national_card": "کارت ملی",
+            "education_certificate": "مدرک تحصیلی مرتبط",
+            "resume": "رزومه حرفه‌ای",
+            "company_registration": "آگهی ثبت یا آخرین تغییرات شرکت",
+            "company_national_id": "شناسه ملی شرکت",
+            "representative_card": "کارت ملی نماینده شرکت",
+        }
+        raise HTTPException(422, "مدارک الزامی ناقص است: " + "، ".join(labels[item] for item in missing_types))
     item = ConsultantVerificationRequest(
         user_id=user.id,
         consultant_type=payload.consultant_type,
@@ -164,7 +195,7 @@ def request_verification(
         specialties=sorted(set(value.strip() for value in payload.specialties if value.strip())),
         years_experience=payload.years_experience,
         qualifications=payload.qualifications.strip(),
-        document_ids=payload.document_ids,
+        document_ids=effective_document_ids,
         applicant_note=payload.applicant_note.strip(),
         profile_payload={
             "bio": payload.bio.strip(),
@@ -212,10 +243,13 @@ def manage_verifications(
         statement = statement.where(
             ConsultantVerificationRequest.status == request_status
         )
-    return [
-        verification_data(item, account)
-        for item, account in session.execute(statement)
-    ]
+    result = []
+    for item, account in session.execute(statement):
+        data = verification_data(item, account)
+        documents = list(session.scalars(select(UserDocument).where(UserDocument.id.in_(item.document_ids))).all()) if item.document_ids else []
+        data["documents"] = [{"id": document.id, "title": document.title, "document_type": document.document_type, "description": document.description, "status": document.status, "download_url": f"/api/backend/api/v1/admin/user-documents/{document.id}/download"} for document in documents]
+        result.append(data)
+    return result
 
 
 @router.patch("/manage/verifications/{request_id}")
@@ -366,6 +400,32 @@ def manage_profiles(
     ]
 
 
+@router.post("/profile/photo", status_code=201)
+async def upload_my_consultant_photo(
+    request: Request,
+    file: Annotated[UploadFile, File(...)],
+    user: Annotated[User, Depends(get_current_user)],
+    session: Annotated[Session, Depends(get_session)],
+):
+    profile = session.get(ConsultantProfile, user.id)
+    if profile is None:
+        raise HTTPException(404, "پروفایل مشاور پیدا نشد.")
+    data = await file.read(8 * 1024 * 1024 + 1)
+    try:
+        validated = validate_upload(file.filename or "", file.content_type, data, 8 * 1024 * 1024)
+    except FileValidationError as error:
+        raise HTTPException(422, str(error)) from None
+    if not validated.mime_type.startswith("image/"):
+        raise HTTPException(422, "فقط تصویر PNG، JPG یا WebP قابل قبول است.")
+    storage: ObjectStorage = request.app.state.storage
+    key = f"user-documents/{user.id}/{uuid.uuid4().hex}{validated.extension}"
+    storage.put(key, validated.data, validated.mime_type)
+    item = UserDocument(user_id=user.id, title="عکس پروفایل مشاور", document_type="profile_photo", description="تصویر بارگذاری‌شده توسط مشاور", purpose="consultant_verification", intended_reviewer="consultant_management", original_filename=validated.filename, storage_key=key, mime_type=validated.mime_type, file_size=len(validated.data))
+    session.add(item)
+    session.commit()
+    return {"url": f"/api/backend/api/v1/consultations/public/advisors/{profile.slug}/photo", "document_id": item.id}
+
+
 @router.get("/profile/mine")
 def my_consultant_profile(
     user: Annotated[User, Depends(get_current_user)],
@@ -387,7 +447,7 @@ def my_consultant_profile(
         )
         profile = ConsultantProfile(
             user_id=user.id,
-            slug=f"{user.email.split('@', 1)[0][:40]}-{user.id[:8]}",
+            slug=consultant_slug(user),
             consultant_type=consultant_type,
             professional_title=approved.professional_title if approved else "مشاور مالیاتی",
             bio=approved.qualifications if approved else "",
@@ -423,6 +483,42 @@ def deleted_consultant_profiles(
         .order_by(ConsultantProfile.deleted_at.desc())
     )
     return [profile_data(profile, account) | {"deleted_at": profile.deleted_at} for profile, account in rows]
+
+
+@router.post("/profile/boost")
+def boost_my_profile(
+    user: Annotated[User, Depends(require_permissions("consultations:handle"))],
+    session: Annotated[Session, Depends(get_session)],
+):
+    profile = session.get(ConsultantProfile, user.id)
+    if profile is None or not profile.is_verified or not profile.is_available:
+        raise HTTPException(422, "فقط پروفایل فعال و تأییدشده قابل ارتقا است.")
+    price = 99_000
+    wallet = session.get(WalletAccount, user.id)
+    if wallet is None or wallet.balance < price:
+        raise HTTPException(422, "موجودی کیف پول برای ارتقای هفت‌روزه کافی نیست.")
+    now = datetime.now(timezone.utc)
+    start = profile.boosted_until if profile.boosted_until and profile.boosted_until > now else now
+    profile.boosted_until = start + timedelta(days=7)
+    wallet.balance -= price
+    session.add(WalletTransaction(user_id=user.id, transaction_type="purchase", amount=price, status="completed", reference=f"BOOST-{uuid.uuid4().hex[:12].upper()}", related_type="consultant_boost", related_id=user.id, otp_hash="", otp_expires_at=now, processed_at=now))
+    session.add(AuditLog(actor_user_id=user.id, action="consultant.profile_boosted", resource_type="consultant_profile", resource_id=user.id, metadata_json={"price": price, "boosted_until": profile.boosted_until.isoformat()}))
+    session.commit()
+    return {"ok": True, "price": price, "boosted_until": profile.boosted_until, "wallet_balance": wallet.balance}
+
+
+@router.get("/manage/bookings")
+def manage_bookings(
+    actor: Annotated[User, Depends(require_permissions("consultations:manage"))],
+    session: Annotated[Session, Depends(get_session)],
+    booking_status: Annotated[str | None, Query(alias="status")] = None,
+):
+    del actor
+    statement = select(ConsultationBooking, User, ConsultantProfile).join(User, User.id == ConsultationBooking.user_id).join(ConsultantProfile, ConsultantProfile.user_id == ConsultationBooking.consultant_id).order_by(ConsultationBooking.scheduled_at.desc())
+    if booking_status:
+        statement = statement.where(ConsultationBooking.status == booking_status)
+    consultants = {item.user_id: session.get(User, item.user_id) for item in session.scalars(select(ConsultantProfile)).all()}
+    return [{"id": booking.id, "scheduled_at": booking.scheduled_at, "status": booking.status, "mode": booking.mode, "price": booking.price, "refund_amount": booking.refund_amount, "cancelled_by": booking.cancelled_by, "cancellation_reason": booking.cancellation_reason, "client": {"id": client.id, "full_name": client.full_name, "email": client.email}, "consultant": {"id": profile.user_id, "full_name": consultants[profile.user_id].full_name if consultants.get(profile.user_id) else profile.slug}} for booking, client, profile in session.execute(statement)]
 
 
 @router.patch("/manage/profiles/{consultant_id}")
@@ -560,7 +656,8 @@ def moderate_consultant_review(
 @router.get("/advisors")
 def advisors(session: Annotated[Session, Depends(get_session)], user: Annotated[User, Depends(get_current_user)], consultant_type: Annotated[str, Query(alias="type")] = "independent"):
     del user
-    rows = session.execute(select(ConsultantProfile, User).join(User, User.id == ConsultantProfile.user_id).where(ConsultantProfile.consultant_type == consultant_type, ConsultantProfile.is_verified.is_(True), ConsultantProfile.is_available.is_(True), ConsultantProfile.deleted_at.is_(None), (ConsultantProfile.blocked_until.is_(None) | (ConsultantProfile.blocked_until < datetime.now(timezone.utc)))).order_by(ConsultantProfile.rating.desc(), User.full_name))
+    now = datetime.now(timezone.utc)
+    rows = session.execute(select(ConsultantProfile, User).join(User, User.id == ConsultantProfile.user_id).where(ConsultantProfile.consultant_type == consultant_type, ConsultantProfile.is_verified.is_(True), ConsultantProfile.is_available.is_(True), ConsultantProfile.deleted_at.is_(None), (ConsultantProfile.blocked_until.is_(None) | (ConsultantProfile.blocked_until < now))).order_by((ConsultantProfile.boosted_until.is_not(None) & (ConsultantProfile.boosted_until > now)).desc(), ConsultantProfile.rating.desc(), User.full_name))
     return [profile_data(profile, account) for profile, account in rows]
 
 
@@ -584,7 +681,7 @@ def public_advisors(
             ),
             User.is_active.is_(True),
         )
-        .order_by(ConsultantProfile.rating.desc(), ConsultantProfile.review_count.desc())
+        .order_by((ConsultantProfile.boosted_until.is_not(None) & (ConsultantProfile.boosted_until > datetime.now(timezone.utc))).desc(), ConsultantProfile.rating.desc(), ConsultantProfile.review_count.desc())
         .limit(limit)
     )
     if city:
@@ -691,7 +788,7 @@ def reschedule_booking(booking_id: str, payload: BookingRescheduleRequest, user:
 
 
 @router.post("/bookings/{booking_id}/cancel")
-def cancel_booking(booking_id: str, user: Annotated[User, Depends(get_current_user)], session: Annotated[Session, Depends(get_session)]):
+def cancel_booking(booking_id: str, user: Annotated[User, Depends(get_current_user)], session: Annotated[Session, Depends(get_session)], payload: BookingCancelRequest = BookingCancelRequest()):
     booking = session.scalar(select(ConsultationBooking).where(ConsultationBooking.id == booking_id, ConsultationBooking.user_id == user.id))
     if booking is None or booking.status != "reserved":
         raise HTTPException(404, "رزرو فعال پیدا نشد")
@@ -705,6 +802,9 @@ def cancel_booking(booking_id: str, user: Annotated[User, Depends(get_current_us
         session.add(wallet)
     wallet.balance += refund
     booking.status = "cancelled"
+    booking.cancelled_by = "user"
+    booking.cancellation_reason = payload.reason.strip()
+    booking.refund_amount = refund
     reference = f"REFUND-{booking.id[:12].upper()}"
     session.add(WalletTransaction(user_id=user.id, transaction_type="refund", amount=refund, status="completed", reference=reference, related_type="consultation_booking", related_id=booking.id, otp_hash="", otp_expires_at=datetime.now(timezone.utc), processed_at=datetime.now(timezone.utc)))
     session.add(UserNotification(user_id=booking.consultant_id, title="رزرو لغو شد", message="کاربر جلسه رزروشده را لغو کرد.", notification_type="booking", action_url="/consultant"))
@@ -769,6 +869,17 @@ def update_consultant_booking(booking_id: str, payload: BookingStatusUpdate, use
         raise HTTPException(422, "این رزرو قبلاً تعیین تکلیف شده است")
     booking.status = payload.status
     booking.session_report = payload.session_report.strip()
+    if payload.status == "cancelled":
+        booking.cancelled_by = "consultant"
+        booking.cancellation_reason = payload.session_report.strip()
+        booking.refund_amount = booking.price
+        wallet = session.get(WalletAccount, booking.user_id)
+        if wallet is None:
+            wallet = WalletAccount(user_id=booking.user_id)
+            session.add(wallet)
+        wallet.balance += booking.price
+        now = datetime.now(timezone.utc)
+        session.add(WalletTransaction(user_id=booking.user_id, transaction_type="refund", amount=booking.price, status="completed", reference=f"REFUND-{booking.id[:12].upper()}", related_type="consultation_booking", related_id=booking.id, otp_hash="", otp_expires_at=now, processed_at=now))
     session.add(UserNotification(user_id=booking.user_id, title="وضعیت جلسه به‌روزرسانی شد", message="وضعیت رزرو شما توسط مشاور تغییر کرد.", notification_type="booking", action_url="/app/consultations/independent"))
     session.commit()
     return {"id": booking.id, "status": booking.status}
@@ -859,6 +970,9 @@ def create_company_consultant(
         specialties=[item.strip() for item in payload.specialties if item.strip()],
         skills=[item.strip() for item in payload.skills if item.strip()],
         qualifications=payload.qualifications.strip(),
+        education=payload.education.strip(),
+        certifications=payload.certifications.strip(),
+        work_history=payload.work_history.strip(),
         years_experience=payload.years_experience,
         consultation_price=payload.consultation_price,
         city=payload.city.strip(),
@@ -866,7 +980,7 @@ def create_company_consultant(
         profile_image_url=payload.profile_image_url.strip(),
         is_online=payload.is_online,
         offers_in_person=payload.offers_in_person,
-        is_verified=True,
+        is_verified=payload.approval_status == "approved",
         is_available=payload.is_available,
     )
     user_profile = UserProfile(
@@ -899,7 +1013,8 @@ def create_company_consultant(
         "email": account.email,
         "role": role_name,
         "slug": slug,
-        "is_verified": True,
+        "is_verified": profile.is_verified,
+        "approval_status": payload.approval_status,
     }
 
 
@@ -910,13 +1025,64 @@ def consultant_import_template(
     workbook = Workbook()
     sheet = workbook.active
     sheet.title = "consultants"
-    sheet.append(["consultant_type", "full_name", "email", "initial_password", "phone", "professional_title", "bio", "specialties", "skills", "qualifications", "years_experience", "consultation_price", "city", "office_address", "is_online", "offers_in_person", "is_available"])
-    sheet.append(["independent", "نمونه مشاور", "advisor@example.com", "ChangeMe123!", "09120000000", "مشاور ارشد مالیاتی", "معرفی کوتاه و سوابق مشاور", "ارزش افزوده، مالیات عملکرد", "تنظیم لایحه، حسابرسی", "کارشناسی ارشد و گواهی‌های حرفه‌ای", 8, 500000, "شیراز", "آدرس دفتر", True, True, True])
+    sheet.append(["consultant_type", "full_name", "email", "initial_password", "phone", "professional_title", "bio", "specialties", "skills", "qualifications", "education", "certifications", "work_history", "years_experience", "consultation_price", "city", "office_address", "is_online", "offers_in_person", "is_available", "approval_status"])
+    sheet.append(["independent", "نمونه مشاور", "advisor@example.com", "ChangeMe123!", "09120000000", "مشاور ارشد مالیاتی", "معرفی کوتاه و سوابق مشاور", "ارزش افزوده، مالیات عملکرد", "تنظیم لایحه، حسابرسی", "صلاحیت‌های حرفه‌ای", "کارشناسی ارشد حسابداری", "گواهی مشاور مالیاتی", "۸ سال سابقه مشاوره", 8, 500000, "شیراز", "آدرس دفتر", True, True, True, "pending"])
     sheet.freeze_panes = "A2"
+    guide = workbook.create_sheet("راهنمای فارسی")
+    guide.append(["ستون", "راهنما"])
+    guide.append(["consultant_type", "independent برای مستقل و company برای شرکتی"])
+    guide.append(["specialties / skills", "موارد را با ویرگول جدا کنید"])
+    guide.append(["approval_status", "approved برای تأیید فوری و pending برای صف بررسی"])
+    guide.append(["initial_password", "حداقل ۸ کاراکتر؛ تغییر در ورود اول الزامی است"])
     stream = BytesIO()
     workbook.save(stream)
     stream.seek(0)
     return StreamingResponse(stream, media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", headers={"Content-Disposition": 'attachment; filename="consultants-import-template.xlsx"'})
+
+
+@router.post("/manage/profiles/{consultant_id}/documents", status_code=201)
+async def upload_consultant_document(
+    consultant_id: str,
+    request: Request,
+    _: Annotated[User, Depends(require_permissions("consultations:manage"))],
+    session: Annotated[Session, Depends(get_session)],
+    file: Annotated[UploadFile, File(...)],
+    title: Annotated[str, Form(min_length=3, max_length=200)],
+    document_type: Annotated[str, Form(max_length=60)] = "other",
+    description: Annotated[str, Form(max_length=3000)] = "",
+):
+    profile = session.get(ConsultantProfile, consultant_id)
+    if profile is None:
+        raise HTTPException(404, "مشاور پیدا نشد.")
+    data = await file.read(20 * 1024 * 1024 + 1)
+    try:
+        validated = validate_upload(file.filename or "", file.content_type, data, 20 * 1024 * 1024)
+    except FileValidationError as error:
+        raise HTTPException(422, str(error)) from None
+    storage: ObjectStorage = request.app.state.storage
+    key = f"user-documents/{consultant_id}/{uuid.uuid4().hex}{validated.extension}"
+    storage.put(key, validated.data, validated.mime_type)
+    item = UserDocument(user_id=consultant_id, title=title.strip(), document_type=document_type, description=description.strip(), purpose="consultant_verification", intended_reviewer="consultant_management", original_filename=validated.filename, storage_key=key, mime_type=validated.mime_type, file_size=len(validated.data))
+    session.add(item)
+    if document_type == "profile_photo":
+        if not validated.mime_type.startswith("image/"):
+            storage.delete(key)
+            raise HTTPException(422, "عکس پروفایل باید فایل تصویری باشد.")
+        profile.profile_image_url = f"/api/backend/api/v1/consultations/public/advisors/{profile.slug}/photo"
+    session.commit()
+    return {"id": item.id, "title": item.title, "filename": item.original_filename}
+
+
+@router.get("/public/advisors/{slug}/photo")
+def public_consultant_photo(slug: str, request: Request, session: Annotated[Session, Depends(get_session)]):
+    profile = session.scalar(select(ConsultantProfile).where(ConsultantProfile.slug == slug, ConsultantProfile.deleted_at.is_(None)))
+    if profile is None:
+        raise HTTPException(404, "تصویر مشاور پیدا نشد.")
+    item = session.scalar(select(UserDocument).where(UserDocument.user_id == profile.user_id, UserDocument.document_type == "profile_photo").order_by(UserDocument.created_at.desc()))
+    if item is None:
+        raise HTTPException(404, "تصویر مشاور پیدا نشد.")
+    storage: ObjectStorage = request.app.state.storage
+    return StreamingResponse(BytesIO(storage.get(item.storage_key)), media_type=item.mime_type, headers={"Cache-Control": "public, max-age=3600"})
 
 
 @router.post("/manage/consultants-import")
@@ -951,14 +1117,24 @@ async def import_consultants(
                 if session.scalar(select(User.id).where(func.lower(User.email) == email)):
                     raise ValueError("ایمیل قبلاً ثبت شده است")
                 consultant_type = str(data.get("consultant_type") or "independent").strip().lower()
+                approval_status = str(data.get("approval_status") or "pending").strip().lower()
+                password = str(data.get("initial_password") or "")
+                if consultant_type not in {"independent", "company"}:
+                    raise ValueError("نوع مشاور باید independent یا company باشد")
+                if approval_status not in {"approved", "pending"}:
+                    raise ValueError("وضعیت تأیید باید approved یا pending باشد")
+                if not email or "@" not in email:
+                    raise ValueError("ایمیل معتبر نیست")
+                if len(password) < 8:
+                    raise ValueError("رمز اولیه باید حداقل ۸ کاراکتر باشد")
                 role = session.scalar(select(Role).where(Role.name == ("company_expert" if consultant_type == "company" else "tax_expert")))
                 if role is None:
                     raise ValueError("نقش مشاور در سامانه فعال نیست")
                 user_id = str(uuid.uuid4())
                 list_value = lambda key: [item.strip() for item in str(data.get(key) or "").replace(",", "،").split("،") if item.strip()]
                 boolean = lambda key, default=True: str(data.get(key) if data.get(key) is not None else default).strip().lower() in {"true", "1", "yes", "بله"}
-                account = User(id=user_id, email=email, email_verified_at=datetime.now(timezone.utc), password_hash=security.hash_password(str(data.get("initial_password") or "")), full_name=str(data.get("full_name") or "").strip(), account_tier="normal", is_active=True, must_change_password=True, roles=[role])
-                profile = ConsultantProfile(user_id=user_id, slug=f"{consultant_type}-{uuid.uuid4().hex[:12]}", consultant_type=consultant_type, professional_title=str(data.get("professional_title") or "").strip(), bio=str(data.get("bio") or "").strip(), specialties=list_value("specialties"), skills=list_value("skills"), qualifications=str(data.get("qualifications") or "").strip(), years_experience=int(data.get("years_experience") or 0), consultation_price=int(data.get("consultation_price") or 0), city=str(data.get("city") or "").strip(), office_address=str(data.get("office_address") or "").strip(), is_online=boolean("is_online"), offers_in_person=boolean("offers_in_person", False), is_verified=True, is_available=boolean("is_available"))
+                account = User(id=user_id, email=email, email_verified_at=datetime.now(timezone.utc), password_hash=security.hash_password(password), full_name=str(data.get("full_name") or "").strip(), account_tier="normal", is_active=True, must_change_password=True, roles=[role])
+                profile = ConsultantProfile(user_id=user_id, slug=f"{consultant_type}-{uuid.uuid4().hex[:12]}", consultant_type=consultant_type, professional_title=str(data.get("professional_title") or "").strip(), bio=str(data.get("bio") or "").strip(), specialties=list_value("specialties"), skills=list_value("skills"), qualifications=str(data.get("qualifications") or "").strip(), education=str(data.get("education") or "").strip(), certifications=str(data.get("certifications") or "").strip(), work_history=str(data.get("work_history") or "").strip(), years_experience=int(data.get("years_experience") or 0), consultation_price=int(data.get("consultation_price") or 0), city=str(data.get("city") or "").strip(), office_address=str(data.get("office_address") or "").strip(), is_online=boolean("is_online"), offers_in_person=boolean("offers_in_person", False), is_verified=approval_status == "approved", is_available=boolean("is_available"))
                 user_profile = UserProfile(user_id=user_id, phone=str(data.get("phone") or "").strip(), city=profile.city, job_title=profile.professional_title, taxpayer_type="legal", bio=profile.bio, referral_code=uuid.uuid4().hex[:10].upper())
                 session.add_all([account, profile, user_profile])
                 session.flush()

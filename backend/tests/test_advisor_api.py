@@ -86,8 +86,8 @@ def test_grounded_answer_history_and_feedback(client_with_document):
     assert answer["citations"]
     assert answer["answer_basis"] == "dataset"
     assert answer["citations"][0]["article_number"]
-    assert "document_title" not in answer["citations"][0]
-    assert "source_url" not in answer["citations"][0]
+    assert answer["citations"][0]["source_title"] == "قانون مالیات بر ارزش افزوده"
+    assert answer["citations"][0]["source_url"] == "https://example.test/law"
     conversation_id = answer["conversation_id"]
     messages = client.get(f"/api/v1/conversations/{conversation_id}/messages", headers=headers)
     assert [item["role"] for item in messages.json()] == ["user", "assistant"]
@@ -138,6 +138,102 @@ def test_curated_question_without_explicit_tax_word_is_answered(client_with_docu
     assert answer["answer_basis"] == "dataset"
     assert answer["confidence"] <= 1
     assert "لزوماً درآمد نیست" in answer["answer"]
+
+
+def test_consecutive_questions_keep_their_own_answers(client_with_document):
+    app, client = client_with_document
+    with app.state.database.session() as session:
+        session.add_all([
+            LawReferenceRecord(
+                id="qa-objection-deadline", source_id="curated-tax-qa",
+                law_name="راهنمای کاربردی مالیاتی", chapter="اعتراض",
+                article_number="238",
+                official_text="پرسش: مهلت اعتراض به برگ تشخیص چند روز است؟\nپاسخ: مهلت اعتراض از تاریخ ابلاغ، سی روز است.",
+                source_url="https://example.com/article-238", keywords="مهلت اعتراض برگ تشخیص سی روز",
+                source_info="پرسش آزمون", is_active=True,
+            ),
+            LawReferenceRecord(
+                id="qa-corrective-invoice", source_id="curated-tax-qa",
+                law_name="راهنمای کاربردی مالیاتی", chapter="سامانه مؤدیان",
+                article_number="",
+                official_text="پرسش: صورتحساب اشتباه را چگونه اصلاح کنم؟\nپاسخ: برای اطلاعات قابل اصلاح، صورتحساب اصلاحی با شماره مرجع صادر کنید.",
+                source_url="https://example.com/invoice", keywords="صورتحساب اشتباه اصلاحی شماره مرجع",
+                source_info="پرسش آزمون", is_active=True,
+            ),
+        ])
+        session.commit()
+
+    headers = auth(client, "answer-order@example.com")
+    first = client.post(
+        "/api/v1/chat/query", headers=headers,
+        json={"question": "مهلت اعتراض به برگ تشخیص چند روز است؟"},
+    )
+    assert first.status_code == 200
+    assert "سی روز" in first.json()["answer"]
+
+    second = client.post(
+        "/api/v1/chat/query", headers=headers,
+        json={
+            "question": "صورتحساب اشتباه را چگونه اصلاح کنم؟",
+            "conversation_id": first.json()["conversation_id"],
+        },
+    )
+    assert second.status_code == 200
+    assert "صورتحساب اصلاحی" in second.json()["answer"]
+    assert "سی روز" not in second.json()["answer"]
+
+    history = client.get(
+        f"/api/v1/conversations/{first.json()['conversation_id']}/messages",
+        headers=headers,
+    ).json()
+    assert [item["role"] for item in history] == ["user", "assistant", "user", "assistant"]
+    assert history[-1]["content"] == second.json()["answer"]
+
+
+def test_new_conversation_does_not_inherit_unrelated_recent_question(client_with_document):
+    app, client = client_with_document
+    headers = auth(client, "isolated-conversations@example.com")
+    first_question = "مهلت اعتراض به برگ تشخیص چند روز است؟"
+    client.post("/api/v1/chat/query", headers=headers, json={"question": first_question})
+
+    with app.state.database.session() as session:
+        user = session.scalar(select(User).where(User.email == "isolated-conversations@example.com"))
+        service = AdvisorService(session)
+        conversation = service._conversation(None, "اصلاح صورتحساب", user)
+        prompt = service._question_with_memory("صورتحساب اشتباه را چگونه اصلاح کنم؟", conversation, user)
+
+    assert first_question not in prompt
+    assert "صورتحساب اشتباه" in prompt
+
+
+@pytest.mark.parametrize(
+    ("question", "law", "article", "minimum"),
+    [
+        ("نحوه اعتراض به برگ تشخیص و ابلاغ چیست؟", "قانون مالیات های مستقیم", "238", 0.9),
+        ("مالیات حقوق و مزایای کارمند را کارفرما چگونه محاسبه می کند؟", "قانون مالیات های مستقیم", "82", 1.0),
+        ("هزینه بدون فاکتور چه زمانی هزینه قابل قبول است؟", "قانون مالیات های مستقیم", "147", 1.0),
+        ("صورتحساب سامانه مودیان چگونه ثبت می شود؟", "قانون پایانه های فروشگاهی", "5", 0.45),
+    ],
+)
+def test_legal_intent_routing(question, law, article, minimum):
+    assert AdvisorService._legal_intent_boost(question, law, article) >= minimum
+
+
+def test_avalai_grounded_answer_requires_valid_sentence_citations(client_with_document):
+    app, _client = client_with_document
+    with app.state.database.session() as session:
+        service = AdvisorService(session)
+        service.provider = type("AvalAIProvider", (), {})()
+        assert service._provider_citations_are_valid("حکم مستند و قابل بررسی است [S1]", 1)
+        assert not service._provider_citations_are_valid("حکم بدون منبع است", 1)
+        assert not service._provider_citations_are_valid("حکم با منبع جعلی است [S3]", 1)
+
+
+def test_conflicting_valid_official_sources_are_detected():
+    first = LawReferenceRecord(id="a", source_id="official-a", law_name="قانون آزمون", chapter="", article_number="10", official_text="متن اول", source_url="", keywords="", source_type="official", legal_status="valid")
+    second = LawReferenceRecord(id="b", source_id="official-b", law_name="قانون آزمون", chapter="", article_number="10", official_text="متن متفاوت", source_url="", keywords="", source_type="official", legal_status="valid")
+    from app.services.advisor import LawHit
+    assert AdvisorService._has_conflicting_law_sources([LawHit(first, 1), LawHit(second, 1)])
 
 
 def test_complex_question_uses_multi_topic_fallback(client_with_document):
@@ -225,30 +321,19 @@ def test_known_short_tax_concept_uses_general_fallback(client_with_document):
     assert "شناسه فعالیت مالیاتی" in response.json()["answer"]
 
 
+def test_generated_answer_markup_is_removed():
+    answer = AdvisorService._plain_text_answer(
+        "## پاسخ\n**نتیجه مهم**\n- اقدام اول\n* اقدام دوم\n`ماده ۲۳۸`"
+    )
+    assert answer == "پاسخ\nنتیجه مهم\nاقدام اول\nاقدام دوم\nماده ۲۳۸"
+    assert "*" not in answer
+    assert "#" not in answer
+
+
 def test_comparison_question_is_not_misclassified_as_general():
     question = "تفاوت شخص حقیقی و شخص حقوقی در مالیات چیست؟"
     assert AdvisorService._is_broad_general_question(question) is False
     assert "چیست" not in terms(question)
-
-
-def test_generated_answer_rejects_unsupported_precise_claim():
-    assert AdvisorService._answer_is_usable(
-        "مهلت ارسال اظهارنامه ۳۰ روز است.",
-        ["ارسال اظهارنامه باید در مهلت قانونی انجام شود."],
-        "مهلت ارسال اظهارنامه چقدر است؟",
-    ) is False
-
-
-@pytest.mark.parametrize(
-    ("question", "expected"),
-    [
-        ("تفاوت شخص حقیقی و شخص حقوقی در مالیات چیست؟", "شرکت یا مؤسسه ثبت‌شده"),
-        ("معافیت مالیاتی شرکت دانش‌بنیان چگونه بررسی می‌شود؟", "همه درآمد شرکت را معاف نمی‌کند"),
-        ("مالیات دستگاه پوز چگونه محاسبه می‌شود؟", "مالیات جداگانه ندارد"),
-    ],
-)
-def test_common_questions_use_fast_relevant_answers(question, expected):
-    assert expected in (AdvisorService._concept_answer(question) or "")
 
 
 @pytest.mark.parametrize(
@@ -303,16 +388,29 @@ def test_casual_chat_and_limited_general_knowledge_fallback(client_with_document
         headers=headers,
         json={"question": "مالیات مستقیم به زبان ساده چیست؟"},
     ).json()
-    assert general["answer_basis"] == "general_knowledge"
-    assert general["confidence"] == 0.2
-    assert general["source_notice"]
-    assert provider.general_calls == 1
+    assert general["answer_basis"] == "insufficient_source"
+    assert general["confidence"] == 0
+    assert provider.general_calls == 0
 
     sensitive = client.post(
         "/api/v1/chat/query",
         headers=headers,
         json={"question": "نرخ مالیات مستقیم امسال چند درصد است؟"},
     ).json()
-    assert sensitive["answer_basis"] == "general_knowledge"
-    assert sensitive["source_notice"]
-    assert provider.general_calls == 2
+    assert sensitive["answer_basis"] == "insufficient_source"
+    assert sensitive["clarifying_questions"]
+    assert sensitive["confidence"] == 0
+    assert provider.general_calls == 0
+
+
+def test_concise_law_fallback_skips_excerpt_metadata():
+    source = (
+        "قانون مالیات‌های مستقیم\nفصل مالیات بر ارث\nماده 17\n"
+        "اموال و دارایی‌هایی که در نتیجه فوت شخص منتقل می‌شود مشمول احکام این فصل است. "
+        "وراث باید تکالیف مقرر در قانون را در مهلت مربوط انجام دهند."
+    )
+
+    answer = AdvisorService._concise_sources([source])
+
+    assert "اموال و دارایی‌ها" in answer
+    assert not answer.startswith("فصل مالیات بر ارث")

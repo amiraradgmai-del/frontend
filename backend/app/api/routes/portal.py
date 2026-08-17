@@ -141,7 +141,7 @@ class MessageCreate(BaseModel):
 
 
 class DocumentAdminUpdate(BaseModel):
-    status: str = Field(pattern="^(uploaded|reviewing|accepted|rejected)$")
+    status: str = Field(pattern="^(uploaded|reviewing|accepted|rejected|correction_required)$")
     admin_note: str = Field(default="", max_length=2000)
 
 
@@ -460,6 +460,12 @@ def send_phone_verification_code(
             )
 
     code = f"{secrets.randbelow(900000) + 100000}"
+    phone = ""
+    if transaction_type == "withdraw":
+        profile = session.get(UserProfile, user.id)
+        phone = profile.phone.strip() if profile else ""
+        if not profile or not phone or not profile.phone_verified:
+            raise HTTPException(422, "برای برداشت وجه، ابتدا شماره موبایل خود را در پروفایل تأیید کنید.")
     challenge = PhoneVerificationChallenge(
         user_id=user.id,
         phone=phone,
@@ -652,17 +658,16 @@ def create_wallet_otp(
     session.flush()
     item.otp_hash = hashlib.sha256(f"{item.id}:{code}".encode()).hexdigest()
     try:
-        EmailSender(request.app.state.settings).send_security_code(
-            user.email,
-            user.full_name,
-            code,
-            "شارژ کیف پول" if transaction_type == "charge" else "برداشت از کیف پول",
-        )
-    except EmailDeliveryError:
+        if transaction_type == "withdraw":
+            if request.app.state.settings.environment != "test":
+                MelipayamakSender(request.app.state.settings).send_verification_code(phone, code)
+        else:
+            EmailSender(request.app.state.settings).send_security_code(user.email, user.full_name, code, "شارژ کیف پول")
+    except (EmailDeliveryError, SmsDeliveryError):
         session.rollback()
         raise HTTPException(503, "ارسال کد تأیید ممکن نیست؛ دوباره تلاش کنید.") from None
     session.commit()
-    response = {"transaction_id": item.id, "expires_in": 120}
+    response = {"transaction_id": item.id, "expires_in": 120, "delivery": "sms" if transaction_type == "withdraw" else "email"}
     if request.app.state.settings.environment == "test":
         response["test_otp"] = code
     return response
@@ -671,6 +676,27 @@ def create_wallet_otp(
 @router.post("/wallet/deposits/otp", status_code=201)
 def deposit_otp(payload: WalletAmountRequest, request: Request, user: Annotated[User, Depends(get_current_user)], session: Annotated[Session, Depends(get_session)]):
     return create_wallet_otp("charge", payload.amount, request, user, session)
+
+
+@router.post("/wallet/deposits", status_code=201)
+def create_deposit(payload: WalletAmountRequest, user: Annotated[User, Depends(get_current_user)], session: Annotated[Session, Depends(get_session)]):
+    account = wallet_for(session, user)
+    now = datetime.now(timezone.utc)
+    item = WalletTransaction(
+        user_id=user.id,
+        transaction_type="charge",
+        amount=payload.amount,
+        status="completed",
+        reference=f"WALLET-{uuid.uuid4().hex[:12].upper()}",
+        related_type="wallet",
+        otp_hash="",
+        otp_expires_at=now,
+        processed_at=now,
+    )
+    account.balance += payload.amount
+    session.add(item)
+    session.commit()
+    return {"transaction_id": item.id, "status": "completed", "balance": account.balance}
 
 
 @router.post("/wallet/withdrawals/otp", status_code=201)
@@ -1047,13 +1073,16 @@ def my_payments(user: Annotated[User, Depends(get_current_user)], session: Annot
 
 
 @router.get("/documents")
-def my_documents(user: Annotated[User, Depends(get_current_user)], session: Annotated[Session, Depends(get_session)]): return [{"id":d.id,"title":d.title,"filename":d.original_filename,"file_size":d.file_size,"status":d.status,"admin_note":d.admin_note,"created_at":d.created_at} for d in session.scalars(select(UserDocument).where(UserDocument.user_id==user.id).order_by(UserDocument.created_at.desc()))]
+def my_documents(user: Annotated[User, Depends(get_current_user)], session: Annotated[Session, Depends(get_session)]): return [{"id":d.id,"title":d.title,"document_type":d.document_type,"description":d.description,"purpose":d.purpose,"intended_reviewer":d.intended_reviewer,"filename":d.original_filename,"file_size":d.file_size,"status":d.status,"admin_note":d.admin_note,"reviewed_at":d.reviewed_at,"created_at":d.created_at} for d in session.scalars(select(UserDocument).where(UserDocument.user_id==user.id).order_by(UserDocument.created_at.desc()))]
 
 
 @router.post("/documents", status_code=201)
-async def upload_document(request: Request, user: Annotated[User, Depends(get_current_user)], session: Annotated[Session, Depends(get_session)], title: Annotated[str, Form()], file: Annotated[UploadFile, File()]):
-    limit = scaled_limits(session, user, PLAN_LIMITS)["documents"]
-    used = session.scalar(select(func.count(UserDocument.id)).where(UserDocument.user_id == user.id)) or 0
+async def upload_document(request: Request, user: Annotated[User, Depends(get_current_user)], session: Annotated[Session, Depends(get_session)], title: Annotated[str, Form(min_length=3, max_length=200)], file: Annotated[UploadFile, File()], document_type: Annotated[str, Form(max_length=60)] = "other", description: Annotated[str, Form(max_length=3000)] = "", purpose: Annotated[str, Form(max_length=80)] = "general_review", intended_reviewer: Annotated[str, Form(max_length=40)] = "support"):
+    verification_upload = purpose == "consultant_verification"
+    limit = 8 if verification_upload else scaled_limits(session, user, PLAN_LIMITS)["documents"]
+    usage_filters = [UserDocument.user_id == user.id]
+    usage_filters.append(UserDocument.purpose == "consultant_verification" if verification_upload else UserDocument.purpose != "consultant_verification")
+    used = session.scalar(select(func.count(UserDocument.id)).where(*usage_filters)) or 0
     if used >= limit:
         raise HTTPException(429, f"سقف {limit} سند در پلن شما تکمیل شده است؛ برای افزایش ظرفیت پلن را ارتقا دهید.")
     data=await file.read(20*1024*1024+1)
@@ -1062,9 +1091,23 @@ async def upload_document(request: Request, user: Annotated[User, Depends(get_cu
     storage: ObjectStorage = request.app.state.storage
     key=f"user-documents/{user.id}/{uuid.uuid4().hex}{validated.extension}"
     storage.put(key,validated.data,validated.mime_type)
-    item=UserDocument(user_id=user.id,title=title.strip(),original_filename=validated.filename,storage_key=key,mime_type=validated.mime_type,file_size=len(validated.data))
+    allowed_types={"national_card","education_certificate","professional_license","resume","company_registration","company_national_id","representative_card","tax_document","financial_statement","contract","other"}
+    allowed_purposes={"consultant_verification","tax_case_review","document_analysis","support_request","general_review"}
+    allowed_reviewers={"consultant_management","tax_expert","support","system_admin"}
+    if document_type not in allowed_types or purpose not in allowed_purposes or intended_reviewer not in allowed_reviewers:
+        storage.delete(key)
+        raise HTTPException(422,"نوع سند، هدف بررسی یا مخاطب انتخاب‌شده معتبر نیست.")
+    item=UserDocument(user_id=user.id,title=title.strip(),document_type=document_type,description=description.strip(),purpose=purpose,intended_reviewer=intended_reviewer,original_filename=validated.filename,storage_key=key,mime_type=validated.mime_type,file_size=len(validated.data))
     session.add(item); session.commit()
-    return {"id":item.id,"title":item.title,"filename":item.original_filename,"file_size":item.file_size,"status":item.status,"created_at":item.created_at}
+    return {"id":item.id,"title":item.title,"document_type":item.document_type,"description":item.description,"purpose":item.purpose,"intended_reviewer":item.intended_reviewer,"filename":item.original_filename,"file_size":item.file_size,"status":item.status,"created_at":item.created_at}
+
+
+@router.get("/documents/{document_id}/download")
+def download_my_document(document_id: str, request: Request, user: Annotated[User, Depends(get_current_user)], session: Annotated[Session, Depends(get_session)]):
+    item=session.get(UserDocument,document_id)
+    if item is None or item.user_id != user.id: raise HTTPException(404,"سند پیدا نشد.")
+    storage: ObjectStorage=request.app.state.storage
+    return StreamingResponse(BytesIO(storage.get(item.storage_key)),media_type=item.mime_type,headers={"Content-Disposition":f'inline; filename="{item.original_filename}"'})
 
 
 @router.get("/tickets")
@@ -1073,6 +1116,9 @@ def my_tickets(user: Annotated[User, Depends(get_current_user)], session: Annota
 
 @router.post("/tickets", status_code=201)
 def create_ticket(payload: TicketCreate,user: Annotated[User, Depends(get_current_user)],session: Annotated[Session, Depends(get_session)]):
+    unanswered = session.scalar(select(SupportTicket).where(SupportTicket.user_id == user.id, SupportTicket.status == "open").order_by(SupportTicket.updated_at.desc()))
+    if unanswered is not None:
+        raise HTTPException(409, "تا زمانی که پشتیبانی به درخواست باز شما پاسخ نداده است، پیام خود را در همان گفتگو ادامه دهید.")
     staff = best_available_staff(session)
     automatic_answer = support_faq_answer(payload.subject, payload.message)
     ticket=SupportTicket(user_id=user.id,assigned_staff_id=staff.id if staff else None,subject=payload.subject,category=payload.category,status="answered" if automatic_answer else "open")
@@ -1276,14 +1322,22 @@ def update_subscription(subscription_id: str, payload: SubscriptionAdminUpdate, 
 
 @admin_router.get("/user-documents")
 def admin_documents(user:Annotated[User,Depends(require_permissions("user_documents:manage"))],session:Annotated[Session,Depends(get_session)]):
-    del user; rows=session.execute(select(UserDocument,User.email).join(User,User.id==UserDocument.user_id).order_by(UserDocument.created_at.desc())); return [{"id":d.id,"email":email,"title":d.title,"filename":d.original_filename,"file_size":d.file_size,"status":d.status,"admin_note":d.admin_note,"created_at":d.created_at} for d,email in rows]
+    del user; rows=session.execute(select(UserDocument,User.email).join(User,User.id==UserDocument.user_id).order_by(UserDocument.created_at.desc())); return [{"id":d.id,"email":email,"title":d.title,"document_type":d.document_type,"description":d.description,"purpose":d.purpose,"intended_reviewer":d.intended_reviewer,"filename":d.original_filename,"file_size":d.file_size,"status":d.status,"admin_note":d.admin_note,"reviewed_at":d.reviewed_at,"created_at":d.created_at} for d,email in rows]
+
+
+@admin_router.get("/user-documents/{document_id}/download")
+def admin_download_user_document(document_id:str,request:Request,user:Annotated[User,Depends(require_permissions("user_documents:manage"))],session:Annotated[Session,Depends(get_session)]):
+    del user; item=session.get(UserDocument,document_id)
+    if item is None: raise HTTPException(404,"سند پیدا نشد.")
+    storage:ObjectStorage=request.app.state.storage
+    return StreamingResponse(BytesIO(storage.get(item.storage_key)),media_type=item.mime_type,headers={"Content-Disposition":f'inline; filename="{item.original_filename}"'})
 
 
 @admin_router.patch("/user-documents/{document_id}")
 def review_user_document(document_id:str,payload:DocumentAdminUpdate,user:Annotated[User,Depends(require_permissions("user_documents:manage"))],session:Annotated[Session,Depends(get_session)]):
-    del user; item=session.get(UserDocument,document_id)
+    item=session.get(UserDocument,document_id)
     if item is None: raise HTTPException(404,"سند پیدا نشد")
-    item.status=payload.status; item.admin_note=payload.admin_note; session.commit(); return {"ok":True}
+    item.status=payload.status; item.admin_note=payload.admin_note.strip(); item.reviewed_by=user.id; item.reviewed_at=datetime.now(timezone.utc); session.commit(); return {"ok":True}
 
 
 @admin_router.get("/tickets")
