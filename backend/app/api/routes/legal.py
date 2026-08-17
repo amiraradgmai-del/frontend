@@ -31,6 +31,29 @@ CATEGORY_HINTS = {
     "regulation": ("آیین نامه", "آیین‌نامه"),
     "directive": ("دستورالعمل",),
 }
+DEFAULT_CATEGORIES = (
+    ("direct-tax", "مالیات‌های مستقیم", "مالیات عملکرد، حقوق، املاک و اشخاص", 10),
+    ("vat", "مالیات بر ارزش افزوده", "قواعد ارزش افزوده و صورتحساب", 20),
+    ("tax-procedure", "دادرسی و اعتراض مالیاتی", "اعتراض، هیأت‌ها و حل اختلاف", 30),
+    ("circular", "بخشنامه‌های مالیاتی", "بخشنامه‌ها و آرای مرتبط", 40),
+    ("regulation", "آیین‌نامه‌ها", "آیین‌نامه‌های اجرایی", 50),
+    ("directive", "دستورالعمل‌ها", "دستورالعمل‌های اجرایی و سامانه‌ای", 60),
+    ("insurance", "بیمه و تأمین اجتماعی", "قوانین بیمه و تأمین اجتماعی", 70),
+    ("commercial", "تجارت و شرکت‌ها", "قوانین تجاری مرتبط با کسب‌وکار", 80),
+    ("labor", "قانون کار", "روابط کارگر و کارفرما", 90),
+    ("accounting", "حسابداری و گزارشگری", "الزامات حسابداری و گزارشگری مالی", 100),
+    ("other", "سایر مقررات مرتبط", "موضوعات قانونی تکمیلی", 999),
+)
+
+
+def ensure_default_categories(session: Session) -> None:
+    existing = set(session.scalars(select(LegalCategory.code)).all())
+    missing = [item for item in DEFAULT_CATEGORIES if item[0] not in existing]
+    if not missing:
+        return
+    for code, title, description, sort_order in missing:
+        session.add(LegalCategory(code=code, title=title, description=description, sort_order=sort_order))
+    session.commit()
 
 
 def normalized_article_query(value: str) -> str | None:
@@ -114,6 +137,23 @@ def suggested_questions(item: LawReferenceRecord) -> list[dict[str, str]]:
     ]
 
 
+def plain_language_summary(item: LawReferenceRecord) -> str:
+    text = re.sub(r"^\s*ماده\s*[۰-۹0-9]+(?:\s*مکرر)?\s*[-ـ:]?\s*", "", item.official_text.strip())
+    replacements = {
+        "مکلف است": "باید", "موظف است": "باید", "مکلفند": "باید", "موظفند": "باید",
+        "می‌باشد": "است", "می باشد": "است", "نمی‌باشد": "نیست", "نمی باشد": "نیست",
+        "می‌گردد": "می‌شود", "می گردد": "می‌شود", "حسب مورد": "بسته به مورد",
+        "نامبرده": "این شخص", "مذکور": "ذکرشده", "مراتب": "موضوع",
+    }
+    for source, target in replacements.items():
+        text = text.replace(source, target)
+    text = re.sub(r"\s+", " ", text).strip()
+    if len(text) > 700:
+        boundary = text.rfind(".", 0, 700)
+        text = text[: boundary if boundary > 250 else 700].rstrip(" ،؛") + "…"
+    return text or "برای این رکورد، خلاصه ساده جداگانه در دسترس نیست؛ متن رسمی را بررسی کنید."
+
+
 class CategoryPayload(BaseModel):
     code: str = Field(min_length=2, max_length=50, pattern=r"^[a-z0-9-]+$")
     title: str = Field(min_length=2, max_length=120)
@@ -181,6 +221,7 @@ def law_data(item: LawReferenceRecord, category_title: str | None = None, includ
         "last_verified_at": item.last_verified_at,
         "updated_at": item.updated_at,
         "suggested_questions": suggested_questions(item),
+        "plain_language_summary": plain_language_summary(item),
     }
     if include_source:
         result.update({"source_id": item.source_id, "source_info": item.source_info, "source_url": item.source_url, "archived_at": item.archived_at})
@@ -189,6 +230,7 @@ def law_data(item: LawReferenceRecord, category_title: str | None = None, includ
 
 @router.get("/categories")
 def categories(_: Annotated[User, Depends(get_current_user)], session: Annotated[Session, Depends(get_session)]):
+    ensure_default_categories(session)
     items = session.scalars(select(LegalCategory).where(LegalCategory.is_active.is_(True)).order_by(LegalCategory.sort_order, LegalCategory.title)).all()
     result = []
     for item in items:

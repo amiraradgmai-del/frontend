@@ -24,6 +24,10 @@ from app.services.site import feature_enabled
 from app.services.email import EmailDeliveryError, EmailSender
 
 router = APIRouter(prefix="/api/v1/consultations", tags=["consultations"])
+REQUIRED_VERIFICATION_DOCUMENTS = {
+    "independent": {"national_card", "education_certificate", "resume"},
+    "company": {"company_registration", "company_national_id", "representative_card"},
+}
 
 
 class BookingStatusUpdate(BaseModel):
@@ -148,17 +152,22 @@ def request_verification(
             409,
             "یک درخواست فعال یا تأییدشده برای این حساب وجود دارد.",
         )
-    if payload.document_ids:
-        owned_documents = set(
-            session.scalars(
-                select(UserDocument.id).where(
-                    UserDocument.user_id == user.id,
-                    UserDocument.id.in_(payload.document_ids),
-                )
-            ).all()
-        )
-        if owned_documents != set(payload.document_ids):
-            raise HTTPException(422, "یک یا چند مدرک انتخاب‌شده معتبر نیست.")
+    owned_documents = list(session.scalars(select(UserDocument).where(UserDocument.user_id == user.id, UserDocument.id.in_(payload.document_ids))).all()) if payload.document_ids else []
+    if {document.id for document in owned_documents} != set(payload.document_ids):
+        raise HTTPException(422, "یک یا چند مدرک انتخاب‌شده معتبر نیست.")
+    required_types = REQUIRED_VERIFICATION_DOCUMENTS[payload.consultant_type]
+    uploaded_types = {document.document_type for document in owned_documents if document.purpose == "consultant_verification"}
+    missing_types = sorted(required_types - uploaded_types)
+    if missing_types:
+        labels = {
+            "national_card": "کارت ملی",
+            "education_certificate": "مدرک تحصیلی مرتبط",
+            "resume": "رزومه حرفه‌ای",
+            "company_registration": "آگهی ثبت یا آخرین تغییرات شرکت",
+            "company_national_id": "شناسه ملی شرکت",
+            "representative_card": "کارت ملی نماینده شرکت",
+        }
+        raise HTTPException(422, "مدارک الزامی ناقص است: " + "، ".join(labels[item] for item in missing_types))
     item = ConsultantVerificationRequest(
         user_id=user.id,
         consultant_type=payload.consultant_type,
@@ -216,10 +225,13 @@ def manage_verifications(
         statement = statement.where(
             ConsultantVerificationRequest.status == request_status
         )
-    return [
-        verification_data(item, account)
-        for item, account in session.execute(statement)
-    ]
+    result = []
+    for item, account in session.execute(statement):
+        data = verification_data(item, account)
+        documents = list(session.scalars(select(UserDocument).where(UserDocument.id.in_(item.document_ids))).all()) if item.document_ids else []
+        data["documents"] = [{"id": document.id, "title": document.title, "document_type": document.document_type, "description": document.description, "status": document.status, "download_url": f"/api/backend/api/v1/admin/user-documents/{document.id}/download"} for document in documents]
+        result.append(data)
+    return result
 
 
 @router.patch("/manage/verifications/{request_id}")

@@ -220,12 +220,18 @@ class UserDocument(Base):
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_uuid)
     user_id: Mapped[str] = mapped_column(String(36), ForeignKey("users.id", ondelete="CASCADE"), index=True)
     title: Mapped[str] = mapped_column(String(200))
+    document_type: Mapped[str] = mapped_column(String(60), default="other", server_default="other", index=True)
+    description: Mapped[str] = mapped_column(Text, default="", server_default="")
+    purpose: Mapped[str] = mapped_column(String(80), default="general_review", server_default="general_review", index=True)
+    intended_reviewer: Mapped[str] = mapped_column(String(40), default="support", server_default="support", index=True)
     original_filename: Mapped[str] = mapped_column(String(255))
     storage_key: Mapped[str] = mapped_column(String(500), unique=True)
     mime_type: Mapped[str] = mapped_column(String(100))
     file_size: Mapped[int] = mapped_column(Integer)
     status: Mapped[str] = mapped_column(String(20), default="uploaded", index=True)
     admin_note: Mapped[str] = mapped_column(Text, default="")
+    reviewed_by: Mapped[str | None] = mapped_column(String(36), ForeignKey("users.id", ondelete="SET NULL"), index=True)
+    reviewed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
 
 

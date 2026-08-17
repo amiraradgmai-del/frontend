@@ -141,7 +141,7 @@ class MessageCreate(BaseModel):
 
 
 class DocumentAdminUpdate(BaseModel):
-    status: str = Field(pattern="^(uploaded|reviewing|accepted|rejected)$")
+    status: str = Field(pattern="^(uploaded|reviewing|accepted|rejected|correction_required)$")
     admin_note: str = Field(default="", max_length=2000)
 
 
@@ -1073,13 +1073,16 @@ def my_payments(user: Annotated[User, Depends(get_current_user)], session: Annot
 
 
 @router.get("/documents")
-def my_documents(user: Annotated[User, Depends(get_current_user)], session: Annotated[Session, Depends(get_session)]): return [{"id":d.id,"title":d.title,"filename":d.original_filename,"file_size":d.file_size,"status":d.status,"admin_note":d.admin_note,"created_at":d.created_at} for d in session.scalars(select(UserDocument).where(UserDocument.user_id==user.id).order_by(UserDocument.created_at.desc()))]
+def my_documents(user: Annotated[User, Depends(get_current_user)], session: Annotated[Session, Depends(get_session)]): return [{"id":d.id,"title":d.title,"document_type":d.document_type,"description":d.description,"purpose":d.purpose,"intended_reviewer":d.intended_reviewer,"filename":d.original_filename,"file_size":d.file_size,"status":d.status,"admin_note":d.admin_note,"reviewed_at":d.reviewed_at,"created_at":d.created_at} for d in session.scalars(select(UserDocument).where(UserDocument.user_id==user.id).order_by(UserDocument.created_at.desc()))]
 
 
 @router.post("/documents", status_code=201)
-async def upload_document(request: Request, user: Annotated[User, Depends(get_current_user)], session: Annotated[Session, Depends(get_session)], title: Annotated[str, Form()], file: Annotated[UploadFile, File()]):
-    limit = scaled_limits(session, user, PLAN_LIMITS)["documents"]
-    used = session.scalar(select(func.count(UserDocument.id)).where(UserDocument.user_id == user.id)) or 0
+async def upload_document(request: Request, user: Annotated[User, Depends(get_current_user)], session: Annotated[Session, Depends(get_session)], title: Annotated[str, Form(min_length=3, max_length=200)], file: Annotated[UploadFile, File()], document_type: Annotated[str, Form(max_length=60)] = "other", description: Annotated[str, Form(max_length=3000)] = "", purpose: Annotated[str, Form(max_length=80)] = "general_review", intended_reviewer: Annotated[str, Form(max_length=40)] = "support"):
+    verification_upload = purpose == "consultant_verification"
+    limit = 8 if verification_upload else scaled_limits(session, user, PLAN_LIMITS)["documents"]
+    usage_filters = [UserDocument.user_id == user.id]
+    usage_filters.append(UserDocument.purpose == "consultant_verification" if verification_upload else UserDocument.purpose != "consultant_verification")
+    used = session.scalar(select(func.count(UserDocument.id)).where(*usage_filters)) or 0
     if used >= limit:
         raise HTTPException(429, f"سقف {limit} سند در پلن شما تکمیل شده است؛ برای افزایش ظرفیت پلن را ارتقا دهید.")
     data=await file.read(20*1024*1024+1)
@@ -1088,9 +1091,23 @@ async def upload_document(request: Request, user: Annotated[User, Depends(get_cu
     storage: ObjectStorage = request.app.state.storage
     key=f"user-documents/{user.id}/{uuid.uuid4().hex}{validated.extension}"
     storage.put(key,validated.data,validated.mime_type)
-    item=UserDocument(user_id=user.id,title=title.strip(),original_filename=validated.filename,storage_key=key,mime_type=validated.mime_type,file_size=len(validated.data))
+    allowed_types={"national_card","education_certificate","professional_license","resume","company_registration","company_national_id","representative_card","tax_document","financial_statement","contract","other"}
+    allowed_purposes={"consultant_verification","tax_case_review","document_analysis","support_request","general_review"}
+    allowed_reviewers={"consultant_management","tax_expert","support","system_admin"}
+    if document_type not in allowed_types or purpose not in allowed_purposes or intended_reviewer not in allowed_reviewers:
+        storage.delete(key)
+        raise HTTPException(422,"نوع سند، هدف بررسی یا مخاطب انتخاب‌شده معتبر نیست.")
+    item=UserDocument(user_id=user.id,title=title.strip(),document_type=document_type,description=description.strip(),purpose=purpose,intended_reviewer=intended_reviewer,original_filename=validated.filename,storage_key=key,mime_type=validated.mime_type,file_size=len(validated.data))
     session.add(item); session.commit()
-    return {"id":item.id,"title":item.title,"filename":item.original_filename,"file_size":item.file_size,"status":item.status,"created_at":item.created_at}
+    return {"id":item.id,"title":item.title,"document_type":item.document_type,"description":item.description,"purpose":item.purpose,"intended_reviewer":item.intended_reviewer,"filename":item.original_filename,"file_size":item.file_size,"status":item.status,"created_at":item.created_at}
+
+
+@router.get("/documents/{document_id}/download")
+def download_my_document(document_id: str, request: Request, user: Annotated[User, Depends(get_current_user)], session: Annotated[Session, Depends(get_session)]):
+    item=session.get(UserDocument,document_id)
+    if item is None or item.user_id != user.id: raise HTTPException(404,"سند پیدا نشد.")
+    storage: ObjectStorage=request.app.state.storage
+    return StreamingResponse(BytesIO(storage.get(item.storage_key)),media_type=item.mime_type,headers={"Content-Disposition":f'inline; filename="{item.original_filename}"'})
 
 
 @router.get("/tickets")
@@ -1305,14 +1322,22 @@ def update_subscription(subscription_id: str, payload: SubscriptionAdminUpdate, 
 
 @admin_router.get("/user-documents")
 def admin_documents(user:Annotated[User,Depends(require_permissions("user_documents:manage"))],session:Annotated[Session,Depends(get_session)]):
-    del user; rows=session.execute(select(UserDocument,User.email).join(User,User.id==UserDocument.user_id).order_by(UserDocument.created_at.desc())); return [{"id":d.id,"email":email,"title":d.title,"filename":d.original_filename,"file_size":d.file_size,"status":d.status,"admin_note":d.admin_note,"created_at":d.created_at} for d,email in rows]
+    del user; rows=session.execute(select(UserDocument,User.email).join(User,User.id==UserDocument.user_id).order_by(UserDocument.created_at.desc())); return [{"id":d.id,"email":email,"title":d.title,"document_type":d.document_type,"description":d.description,"purpose":d.purpose,"intended_reviewer":d.intended_reviewer,"filename":d.original_filename,"file_size":d.file_size,"status":d.status,"admin_note":d.admin_note,"reviewed_at":d.reviewed_at,"created_at":d.created_at} for d,email in rows]
+
+
+@admin_router.get("/user-documents/{document_id}/download")
+def admin_download_user_document(document_id:str,request:Request,user:Annotated[User,Depends(require_permissions("user_documents:manage"))],session:Annotated[Session,Depends(get_session)]):
+    del user; item=session.get(UserDocument,document_id)
+    if item is None: raise HTTPException(404,"سند پیدا نشد.")
+    storage:ObjectStorage=request.app.state.storage
+    return StreamingResponse(BytesIO(storage.get(item.storage_key)),media_type=item.mime_type,headers={"Content-Disposition":f'inline; filename="{item.original_filename}"'})
 
 
 @admin_router.patch("/user-documents/{document_id}")
 def review_user_document(document_id:str,payload:DocumentAdminUpdate,user:Annotated[User,Depends(require_permissions("user_documents:manage"))],session:Annotated[Session,Depends(get_session)]):
-    del user; item=session.get(UserDocument,document_id)
+    item=session.get(UserDocument,document_id)
     if item is None: raise HTTPException(404,"سند پیدا نشد")
-    item.status=payload.status; item.admin_note=payload.admin_note; session.commit(); return {"ok":True}
+    item.status=payload.status; item.admin_note=payload.admin_note.strip(); item.reviewed_by=user.id; item.reviewed_at=datetime.now(timezone.utc); session.commit(); return {"ok":True}
 
 
 @admin_router.get("/tickets")

@@ -8,8 +8,9 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
+import { UserDocumentUploader, type UserDocument } from "@/components/user-document-uploader";
 
-type DocumentItem = { id: string; title: string; status: string };
+type DocumentItem = Pick<UserDocument, "id" | "title" | "status" | "document_type" | "purpose">;
 type VerificationItem = {
   id: string;
   consultant_type: "independent" | "company";
@@ -80,6 +81,9 @@ export default function ConsultantVerificationPage() {
   }
 
   const hasActiveRequest = items.some((item) => item.status === "pending" || item.status === "approved");
+  const requiredDocuments = consultantType === "independent" ? [["national_card","کارت ملی"],["education_certificate","مدرک تحصیلی مرتبط"],["resume","رزومه حرفه‌ای"]] : [["company_registration","آگهی ثبت یا آخرین تغییرات شرکت"],["company_national_id","شناسه ملی شرکت"],["representative_card","کارت ملی نماینده شرکت"]];
+  const selectedTypes = new Set(documents.filter(item => selectedDocuments.includes(item.id) && item.purpose === "consultant_verification").map(item => item.document_type));
+  const missingDocuments = requiredDocuments.filter(([type]) => !selectedTypes.has(type));
   return <div className="space-y-7">
     <header className="rounded-[2rem] bg-gradient-to-l from-emerald-600 via-teal-600 to-cyan-600 p-8 text-white shadow-xl shadow-teal-900/15">
       <p className="text-sm text-emerald-50">همکاری حرفه‌ای با چکاه</p>
@@ -99,9 +103,10 @@ export default function ConsultantVerificationPage() {
         <label className="space-y-2 text-sm"><span>تخصص‌ها</span><Input value={specialties} onChange={(event) => setSpecialties(event.target.value)} placeholder="مالیات مستقیم، ارزش افزوده" required /></label>
         <label className="space-y-2 text-sm"><span>سابقه فعالیت</span><Input type="number" min="0" max="70" value={experience} onChange={(event) => setExperience(event.target.value)} placeholder="تعداد سال" required /></label>
         <label className="space-y-2 text-sm sm:col-span-2"><span>سوابق و صلاحیت‌های حرفه‌ای</span><Textarea value={qualifications} onChange={(event) => setQualifications(event.target.value)} className="min-h-28" placeholder="تحصیلات، گواهی‌ها و تجربه‌های مرتبط را توضیح دهید." required minLength={10} /></label>
-        <div className="space-y-3 rounded-2xl border border-dashed border-sky-200 p-4 sm:col-span-2"><p className="flex items-center gap-2 text-sm font-bold"><FileCheck2 className="size-4 text-blue-600" /> مدارک بارگذاری‌شده</p>{documents.length ? <div className="grid gap-2 sm:grid-cols-2">{documents.map((document) => <label key={document.id} className="flex items-center gap-2 rounded-xl bg-sky-50 p-3 text-sm"><input type="checkbox" checked={selectedDocuments.includes(document.id)} onChange={(event) => setSelectedDocuments((current) => event.target.checked ? [...current, document.id] : current.filter((id) => id !== document.id))} />{document.title}</label>)}</div> : <p className="text-xs text-slate-500">مدرکی بارگذاری نشده است؛ ابتدا از بخش «اسناد من» مدارک لازم را اضافه کنید.</p>}</div>
+        <div className="space-y-4 rounded-2xl border border-sky-200 bg-sky-50/40 p-4 sm:col-span-2"><div><p className="flex items-center gap-2 text-sm font-black"><FileCheck2 className="size-4 text-blue-600" /> مدارک لازم برای {consultantType === "independent" ? "مشاور مستقل" : "مشاور شرکت"}</p><div className="mt-3 grid gap-2 sm:grid-cols-3">{requiredDocuments.map(([type,label])=><div key={type} className={`rounded-xl border p-3 text-xs font-bold ${selectedTypes.has(type)?"border-emerald-200 bg-emerald-50 text-emerald-800":"border-amber-200 bg-amber-50 text-amber-900"}`}>{selectedTypes.has(type)?"✓ ":"الزامی: "}{label}</div>)}</div><p className="mt-2 text-xs leading-6 text-slate-600">مجوز حرفه‌ای و گواهی‌های تکمیلی اختیاری‌اند، اما به ارزیابی دقیق‌تر و نمایش بهتر پروفایل کمک می‌کنند.</p></div><div className="rounded-xl border bg-white p-4"><p className="mb-3 text-sm font-black">بارگذاری مدرک از همین صفحه</p><UserDocumentUploader presetPurpose="consultant_verification" presetReviewer="consultant_management" compact onUploaded={(document)=>{setDocuments(current=>[document,...current]);setSelectedDocuments(current=>[...new Set([...current,document.id])])}}/></div>{documents.length>0&&<div><p className="mb-2 text-sm font-bold">مدارک انتخاب‌شده برای این درخواست</p><div className="grid gap-2 sm:grid-cols-2">{documents.filter(document=>document.purpose==="consultant_verification").map((document)=><label key={document.id} className="flex items-center gap-2 rounded-xl bg-white p-3 text-sm"><input type="checkbox" checked={selectedDocuments.includes(document.id)} onChange={(event)=>setSelectedDocuments(current=>event.target.checked?[...new Set([...current,document.id])]:current.filter(id=>id!==document.id))}/>{document.title}</label>)}</div></div>}</div>
         <label className="space-y-2 text-sm sm:col-span-2"><span>توضیحات تکمیلی</span><Textarea value={note} onChange={(event) => setNote(event.target.value)} placeholder="توضیح اختیاری برای مدیر بررسی‌کننده" /></label>
-        <Button className="bg-teal-600 hover:bg-teal-700 sm:col-span-2" disabled={busy || hasActiveRequest}><Send /> ثبت درخواست احراز صلاحیت</Button>
+        {missingDocuments.length>0&&<p className="rounded-xl bg-amber-50 p-3 text-sm text-amber-900 sm:col-span-2">برای ارسال درخواست، این مدارک را بارگذاری و انتخاب کنید: {missingDocuments.map(([,label])=>label).join("، ")}</p>}
+        <Button className="bg-teal-600 hover:bg-teal-700 sm:col-span-2" disabled={busy || hasActiveRequest || missingDocuments.length>0}><Send /> ثبت درخواست احراز صلاحیت</Button>
       </form>{message && <p className="mt-4 rounded-xl bg-sky-50 p-3 text-sm text-sky-800">{message}</p>}</CardContent>
     </Card>
     <div className="rounded-2xl border border-emerald-100 bg-emerald-50 p-4 text-sm leading-7 text-emerald-900"><BadgeCheck className="ml-2 inline size-5" />تأیید صلاحیت به معنی فعال‌شدن پنل تخصصی است و دسترسی‌های آن فقط به پرونده‌های مرتبط محدود می‌شود.</div>

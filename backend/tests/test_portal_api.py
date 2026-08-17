@@ -85,8 +85,13 @@ def test_customer_profile_checkout_documents_and_tickets(portal_client):
         assert session.scalar(select(UserSubscription)).package_code == "gold"
     assert client.get("/users/me", headers=headers).json()["account_tier"] == "plus"
 
-    document = client.post("/api/v1/portal/documents", headers=headers, data={"title": "اظهارنامه"}, files={"file": ("tax.txt", "متن سند".encode(), "text/plain")})
+    document = client.post("/api/v1/portal/documents", headers=headers, data={"title": "اظهارنامه", "document_type": "tax_document", "description": "اظهارنامه عملکرد برای بررسی", "purpose": "tax_case_review", "intended_reviewer": "tax_expert"}, files={"file": ("tax.txt", "متن سند".encode(), "text/plain")})
     assert document.status_code == 201, document.text
+    listed_document = client.get("/api/v1/portal/documents", headers=headers).json()[0]
+    assert listed_document["description"] == "اظهارنامه عملکرد برای بررسی"
+    assert listed_document["purpose"] == "tax_case_review"
+    downloaded_document = client.get(f"/api/v1/portal/documents/{document.json()['id']}/download", headers=headers)
+    assert downloaded_document.status_code == 200
     ticket = client.post("/api/v1/portal/tickets", headers=headers, json={"subject": "پیگیری پرداخت", "category": "billing", "message": "لطفاً پرداخت من را بررسی کنید."})
     assert ticket.status_code == 201, ticket.text
     assert ticket.json()["messages"][0]["is_staff"] is False
@@ -123,6 +128,7 @@ def test_customer_profile_checkout_documents_and_tickets(portal_client):
     assert search.status_code == 200
     assert search.json()[0]["article_number"] == "2"
     assert len(search.json()[0]["suggested_questions"]) == 2
+    assert search.json()[0]["plain_language_summary"]
 
 
 def test_legal_categories_filter_records_and_every_record_has_questions(portal_client):
