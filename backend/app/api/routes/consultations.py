@@ -400,6 +400,32 @@ def manage_profiles(
     ]
 
 
+@router.post("/profile/photo", status_code=201)
+async def upload_my_consultant_photo(
+    request: Request,
+    file: Annotated[UploadFile, File(...)],
+    user: Annotated[User, Depends(get_current_user)],
+    session: Annotated[Session, Depends(get_session)],
+):
+    profile = session.get(ConsultantProfile, user.id)
+    if profile is None:
+        raise HTTPException(404, "پروفایل مشاور پیدا نشد.")
+    data = await file.read(8 * 1024 * 1024 + 1)
+    try:
+        validated = validate_upload(file.filename or "", file.content_type, data, 8 * 1024 * 1024)
+    except FileValidationError as error:
+        raise HTTPException(422, str(error)) from None
+    if not validated.mime_type.startswith("image/"):
+        raise HTTPException(422, "فقط تصویر PNG، JPG یا WebP قابل قبول است.")
+    storage: ObjectStorage = request.app.state.storage
+    key = f"user-documents/{user.id}/{uuid.uuid4().hex}{validated.extension}"
+    storage.put(key, validated.data, validated.mime_type)
+    item = UserDocument(user_id=user.id, title="عکس پروفایل مشاور", document_type="profile_photo", description="تصویر بارگذاری‌شده توسط مشاور", purpose="consultant_verification", intended_reviewer="consultant_management", original_filename=validated.filename, storage_key=key, mime_type=validated.mime_type, file_size=len(validated.data))
+    session.add(item)
+    session.commit()
+    return {"url": f"/api/backend/api/v1/consultations/public/advisors/{profile.slug}/photo", "document_id": item.id}
+
+
 @router.get("/profile/mine")
 def my_consultant_profile(
     user: Annotated[User, Depends(get_current_user)],

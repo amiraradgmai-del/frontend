@@ -1,7 +1,8 @@
 "use client";
 
 import { FormEvent, useEffect, useState } from "react";
-import { BadgeCheck, BriefcaseBusiness, Clock3, Rocket, Save, ShieldAlert, UserRound } from "lucide-react";
+import Image from "next/image";
+import { BadgeCheck, BriefcaseBusiness, Clock3, Rocket, Save, ShieldAlert, Upload, UserRound } from "lucide-react";
 import { api, ApiError } from "@/lib/api";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
@@ -30,6 +31,7 @@ export default function ConsultantProfilePage() {
   });
   const [message, setMessage] = useState("");
   const [busy, setBusy] = useState(false);
+  const [uploadingPhoto, setUploadingPhoto] = useState(false);
 
   useEffect(() => {
     api<Profile>("api/v1/consultations/profile/mine").then((data) => {
@@ -89,6 +91,19 @@ export default function ConsultantProfilePage() {
     finally { setBusy(false); }
   }
 
+  async function uploadPhoto(file: File) {
+    setUploadingPhoto(true); setMessage("");
+    try {
+      const body = new FormData();
+      body.append("file", file);
+      const result = await api<{ url: string }>("api/v1/consultations/profile/photo", { method: "POST", body });
+      set("profile_image_url", result.url);
+      setMessage("عکس بارگذاری شد. برای انتشار عمومی، تغییرات پروفایل را برای تأیید ارسال کنید.");
+    } catch (error) {
+      setMessage(error instanceof ApiError ? error.message : "بارگذاری عکس انجام نشد.");
+    } finally { setUploadingPhoto(false); }
+  }
+
   if (!profile) return <div className="rounded-2xl bg-white p-10 text-center text-sm text-slate-500">{message || "در حال دریافت پروفایل..."}</div>;
 
   return <div className="space-y-7">
@@ -113,7 +128,7 @@ export default function ConsultantProfilePage() {
         <Field label="هزینه جلسه به تومان"><Input inputMode="numeric" value={form.consultation_price} onChange={(e) => set("consultation_price", e.target.value.replace(/\D/g, ""))} required /></Field>
         <Field label="حوزه‌های تخصصی"><Input value={form.specialties} onChange={(e) => set("specialties", e.target.value)} placeholder="با ، جدا کنید" required /></Field>
         <Field label="مهارت‌ها"><Input value={form.skills} onChange={(e) => set("skills", e.target.value)} placeholder="با ، جدا کنید" /></Field>
-        <Field label="آدرس تصویر پروفایل"><Input dir="ltr" value={form.profile_image_url} onChange={(e) => set("profile_image_url", e.target.value)} /></Field>
+        <Field label="عکس پروفایل"><div className="flex items-center gap-3">{form.profile_image_url ? <Image src={form.profile_image_url} width={64} height={64} alt="پیش‌نمایش عکس پروفایل" className="size-16 rounded-2xl border object-cover" unoptimized /> : <span className="flex size-16 items-center justify-center rounded-2xl bg-slate-100"><UserRound /></span>}<label className={`flex cursor-pointer items-center gap-2 rounded-xl border px-4 py-2 font-bold ${uploadingPhoto ? "pointer-events-none opacity-50" : ""}`}><Upload className="size-4" />{uploadingPhoto ? "در حال بارگذاری..." : "انتخاب عکس"}<input type="file" accept="image/png,image/jpeg,image/webp" className="hidden" onChange={(e) => e.target.files?.[0] && void uploadPhoto(e.target.files[0])} /></label></div><p className="text-xs text-slate-500">PNG، JPG یا WebP؛ حداکثر ۸ مگابایت</p></Field>
         <Field label="آدرس دفتر"><Input value={form.office_address} onChange={(e) => set("office_address", e.target.value)} /></Field>
         <Field label="معرفی کوتاه" wide><Textarea className="min-h-24" value={form.bio} onChange={(e) => set("bio", e.target.value)} /></Field>
         <Field label="صلاحیت‌ها و توضیحات حرفه‌ای" wide><Textarea className="min-h-24" value={form.qualifications} onChange={(e) => set("qualifications", e.target.value)} required /></Field>
