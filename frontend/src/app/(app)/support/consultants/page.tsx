@@ -12,18 +12,20 @@ type FormState = {
   consultant_type: "company" | "independent";
   full_name: string; email: string; initial_password: string; phone: string;
   professional_title: string; bio: string; specialties: string; skills: string;
-  qualifications: string; years_experience: string; consultation_price: string;
+  qualifications: string; education: string; certifications: string; work_history: string;
+  years_experience: string; consultation_price: string;
   city: string; office_address: string; profile_image_url: string;
   is_online: boolean; offers_in_person: boolean; is_available: boolean;
+  approval_status: "approved" | "pending";
 };
 
 const initialForm: FormState = {
   consultant_type: "company",
   full_name: "", email: "", initial_password: "", phone: "",
   professional_title: "", bio: "", specialties: "", skills: "",
-  qualifications: "", years_experience: "", consultation_price: "",
+  qualifications: "", education: "", certifications: "", work_history: "", years_experience: "", consultation_price: "",
   city: "", office_address: "", profile_image_url: "",
-  is_online: true, offers_in_person: false, is_available: true,
+  is_online: true, offers_in_person: false, is_available: true, approval_status: "pending",
 };
 
 export function ConsultantCreateForm() {
@@ -34,6 +36,9 @@ export function ConsultantCreateForm() {
   const [error, setError] = useState("");
   const [importing, setImporting] = useState(false);
   const [importResult, setImportResult] = useState("");
+  const [importErrors, setImportErrors] = useState<{ row: number; error: string }[]>([]);
+  const [profilePhoto, setProfilePhoto] = useState<File | null>(null);
+  const [documents, setDocuments] = useState<File[]>([]);
 
   const set = (key: keyof FormState, value: string | boolean) => setForm((current) => ({ ...current, [key]: value }));
   const splitList = (value: string) => value.split(/[،,\n]/).map((item) => item.trim()).filter(Boolean);
@@ -42,7 +47,7 @@ export function ConsultantCreateForm() {
     event.preventDefault();
     setSaving(true); setMessage(""); setError("");
     try {
-      const result = await api<{ full_name: string; email: string }>("api/v1/consultations/manage/company-consultants", {
+      const result = await api<{ id: string; full_name: string; email: string }>("api/v1/consultations/manage/company-consultants", {
         method: "POST",
         body: JSON.stringify({
           ...form,
@@ -52,8 +57,22 @@ export function ConsultantCreateForm() {
           consultation_price: Number(form.consultation_price.replaceAll(",", "") || 0),
         }),
       });
+      const uploads = [
+        ...(profilePhoto ? [{ file: profilePhoto, type: "profile_photo", title: "عکس پروفایل" }] : []),
+        ...documents.map((file) => ({ file, type: "other", title: file.name })),
+      ];
+      for (const upload of uploads) {
+        const body = new FormData();
+        body.append("file", upload.file);
+        body.append("title", upload.title);
+        body.append("document_type", upload.type);
+        body.append("description", "بارگذاری‌شده توسط مدیر سامانه هنگام ساخت حساب مشاور");
+        await api(`api/v1/consultations/manage/profiles/${result.id}/documents`, { method: "POST", body });
+      }
       setMessage(`حساب ${result.full_name} با ایمیل ${result.email} ساخته و تأیید شد.`);
       setForm(initialForm);
+      setProfilePhoto(null);
+      setDocuments([]);
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : "ساخت حساب انجام نشد.");
     } finally {
@@ -66,7 +85,8 @@ export function ConsultantCreateForm() {
     try {
       const body = new FormData();
       body.append("file", file);
-      const result = await api<{ created: number; failed: number }>("api/v1/consultations/manage/consultants-import", { method: "POST", body });
+      const result = await api<{ created: number; failed: number; errors: { row: number; error: string }[] }>("api/v1/consultations/manage/consultants-import", { method: "POST", body });
+      setImportErrors(result.errors);
       setImportResult(`${result.created.toLocaleString("fa-IR")} مشاور اضافه شد${result.failed ? ` و ${result.failed.toLocaleString("fa-IR")} ردیف خطا داشت` : ""}.`);
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : "ورود اطلاعات Excel انجام نشد.");
@@ -81,7 +101,7 @@ export function ConsultantCreateForm() {
     </header>
 
     <section className="grid gap-4 rounded-[2rem] border border-emerald-200 bg-gradient-to-l from-emerald-50 to-white p-6 shadow-sm lg:grid-cols-[1fr_auto]">
-      <div><div className="flex items-center gap-3"><span className="flex size-11 items-center justify-center rounded-xl bg-emerald-100 text-emerald-700"><FileSpreadsheet /></span><div><h2 className="font-black">افزودن گروهی مشاوران با Excel</h2><p className="mt-1 text-sm text-slate-600">قالب راهنما را دانلود کنید، هر مشاور را در یک ردیف بنویسید و فایل تکمیل‌شده را بارگذاری کنید.</p></div></div><p className="mt-4 text-xs leading-6 text-slate-500">نام ستون‌ها را تغییر ندهید. تخصص‌ها و مهارت‌ها را با «،» جدا کنید. نوع مشاور فقط <span dir="ltr">independent</span> یا <span dir="ltr">company</span> باشد.</p>{importResult && <p className="mt-3 rounded-xl bg-emerald-100 p-3 text-sm text-emerald-800">{importResult}</p>}</div>
+      <div><div className="flex items-center gap-3"><span className="flex size-11 items-center justify-center rounded-xl bg-emerald-100 text-emerald-700"><FileSpreadsheet /></span><div><h2 className="font-black">افزودن گروهی مشاوران با Excel</h2><p className="mt-1 text-sm text-slate-600">قالب راهنما را دانلود کنید، هر مشاور را در یک ردیف بنویسید و فایل تکمیل‌شده را بارگذاری کنید.</p></div></div><p className="mt-4 text-xs leading-6 text-slate-500">نام ستون‌ها را تغییر ندهید. تخصص‌ها و مهارت‌ها را با «،» جدا کنید. نوع مشاور فقط <span dir="ltr">independent</span> یا <span dir="ltr">company</span> باشد.</p>{importResult && <p className="mt-3 rounded-xl bg-emerald-100 p-3 text-sm text-emerald-800">{importResult}</p>}{importErrors.length > 0 && <div className="mt-3 rounded-xl border border-rose-200 bg-rose-50 p-3"><p className="text-sm font-black text-rose-800">خطاهای فایل</p><ul className="mt-2 space-y-1 text-xs text-rose-700">{importErrors.map((item) => <li key={`${item.row}-${item.error}`}>ردیف {item.row.toLocaleString("fa-IR")}: {item.error}</li>)}</ul></div>}</div>
       <div className="flex flex-wrap items-center gap-2"><a href="/api/backend/api/v1/consultations/manage/consultants-import-template.xlsx" className="flex items-center gap-2 rounded-xl border border-emerald-300 bg-white px-4 py-3 text-sm font-bold text-emerald-700"><Download className="size-4" /> دانلود قالب و راهنما</a><label className={`flex cursor-pointer items-center gap-2 rounded-xl bg-emerald-600 px-4 py-3 text-sm font-bold text-white ${importing ? "pointer-events-none opacity-60" : ""}`}><Upload className="size-4" />{importing ? "در حال پردازش…" : "بارگذاری Excel"}<input type="file" accept=".xlsx" className="hidden" onChange={(event) => event.target.files?.[0] && void importExcel(event.target.files[0])} /></label></div>
     </section>
 
@@ -100,6 +120,9 @@ export function ConsultantCreateForm() {
         <Field label="حوزه‌های تخصصی *"><Input required value={form.specialties} onChange={(e) => set("specialties", e.target.value)} placeholder="ارزش افزوده، مالیات عملکرد، دادرسی" /></Field>
         <Field label="مهارت‌ها"><Input value={form.skills} onChange={(e) => set("skills", e.target.value)} placeholder="تنظیم لایحه، حسابرسی، سامانه مؤدیان" /></Field>
         <Field label="تحصیلات و مدارک" wide><Textarea value={form.qualifications} onChange={(e) => set("qualifications", e.target.value)} placeholder="مدرک تحصیلی، گواهی‌ها و مجوزهای حرفه‌ای" /></Field>
+        <Field label="تحصیلات" wide><Textarea value={form.education} onChange={(e) => set("education", e.target.value)} placeholder="رشته، مقطع و دانشگاه" /></Field>
+        <Field label="گواهی‌ها و مجوزها" wide><Textarea value={form.certifications} onChange={(e) => set("certifications", e.target.value)} placeholder="عنوان گواهی، صادرکننده و تاریخ" /></Field>
+        <Field label="سوابق کاری" wide><Textarea value={form.work_history} onChange={(e) => set("work_history", e.target.value)} placeholder="سمت، مجموعه و مدت همکاری" /></Field>
         <Field label="معرفی و رزومه کوتاه *" wide><Textarea required minLength={20} value={form.bio} onChange={(e) => set("bio", e.target.value)} placeholder="خلاصه تجربه‌ها و خدمات قابل ارائه" /></Field>
       </Section>
 
@@ -108,11 +131,15 @@ export function ConsultantCreateForm() {
         <Field label="هزینه جلسه (تومان)"><Input inputMode="numeric" value={form.consultation_price} onChange={(e) => set("consultation_price", e.target.value.replace(/\D/g, ""))} placeholder="مثلاً ۵۰۰۰۰۰" /></Field>
         <Field label="آدرس دفتر" wide><Input value={form.office_address} onChange={(e) => set("office_address", e.target.value)} placeholder="آدرس برای جلسات حضوری" /></Field>
         <Field label="لینک تصویر پروفایل" wide><Input dir="ltr" value={form.profile_image_url} onChange={(e) => set("profile_image_url", e.target.value)} placeholder="https://..." /></Field>
+        <Field label="بارگذاری عکس پروفایل"><Input type="file" accept="image/png,image/jpeg,image/webp" onChange={(e) => setProfilePhoto(e.target.files?.[0] ?? null)} /></Field>
+        <Field label="مدارک مشاور"><Input type="file" multiple accept=".pdf,.png,.jpg,.jpeg,.webp" onChange={(e) => setDocuments(Array.from(e.target.files ?? []))} /></Field>
+        <p className="text-xs leading-6 text-slate-500 sm:col-span-2">مدارک پیشنهادی مشاور مستقل: کارت ملی، مدرک تحصیلی، رزومه و مجوز حرفه‌ای. برای مشاور شرکتی: آگهی ثبت، شناسه ملی شرکت و کارت ملی نماینده.</p>
         <div className="grid gap-3 sm:col-span-2 sm:grid-cols-3">
           <Check label="مشاوره آنلاین" checked={form.is_online} onChange={(value) => set("is_online", value)} />
           <Check label="مشاوره حضوری" checked={form.offers_in_person} onChange={(value) => set("offers_in_person", value)} />
           <Check label="آماده پذیرش" checked={form.is_available} onChange={(value) => set("is_available", value)} />
         </div>
+        <Field label="وضعیت اولیه" wide><select value={form.approval_status} onChange={(e) => set("approval_status", e.target.value as "approved" | "pending")} className="h-10 w-full rounded-lg border bg-white px-3"><option value="pending">ارسال به صف بررسی</option><option value="approved">تأیید و انتشار فوری</option></select></Field>
       </Section>
 
       {message && <p className="flex items-center gap-2 rounded-2xl bg-emerald-50 p-4 text-sm text-emerald-700"><CheckCircle2 className="size-5" />{message}</p>}

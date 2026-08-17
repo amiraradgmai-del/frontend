@@ -4,7 +4,7 @@ import re
 import uuid
 from datetime import datetime, timedelta, timezone
 
-from fastapi import APIRouter, Depends, File, HTTPException, Query, Request, UploadFile, status
+from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, Request, UploadFile, status
 from fastapi.responses import StreamingResponse
 from io import BytesIO
 from openpyxl import Workbook, load_workbook
@@ -15,6 +15,8 @@ from sqlalchemy.orm import Session
 
 from app.api.dependencies import get_consultation_service, get_current_user, get_security, get_session, require_permissions
 from app.core.security import SecurityManager
+from app.documents.storage import ObjectStorage
+from app.documents.validation import FileValidationError, validate_upload
 from app.models.auth import AuditLog, Role, User
 from app.models.consultations import ConsultationBooking, ConsultantProfile, ConsultantReview, ConsultantSettlement, ConsultantVerificationRequest, ConsultationRequest
 from app.models.portal import UserDocument, UserNotification, UserProfile, WalletAccount, WalletTransaction
@@ -69,6 +71,9 @@ class CompanyConsultantCreate(BaseModel):
     specialties: list[str] = Field(min_length=1, max_length=20)
     skills: list[str] = Field(default_factory=list, max_length=20)
     qualifications: str = Field(default="", max_length=2000)
+    education: str = Field(default="", max_length=2000)
+    certifications: str = Field(default="", max_length=2000)
+    work_history: str = Field(default="", max_length=3000)
     years_experience: int = Field(default=0, ge=0, le=70)
     consultation_price: int = Field(default=0, ge=0, le=1_000_000_000)
     city: str = Field(default="", max_length=80)
@@ -77,6 +82,7 @@ class CompanyConsultantCreate(BaseModel):
     is_online: bool = True
     offers_in_person: bool = False
     is_available: bool = True
+    approval_status: Literal["approved", "pending"] = "approved"
 
 
 @router.post("", response_model=ConsultationResponse, status_code=status.HTTP_201_CREATED)
@@ -938,6 +944,9 @@ def create_company_consultant(
         specialties=[item.strip() for item in payload.specialties if item.strip()],
         skills=[item.strip() for item in payload.skills if item.strip()],
         qualifications=payload.qualifications.strip(),
+        education=payload.education.strip(),
+        certifications=payload.certifications.strip(),
+        work_history=payload.work_history.strip(),
         years_experience=payload.years_experience,
         consultation_price=payload.consultation_price,
         city=payload.city.strip(),
@@ -945,7 +954,7 @@ def create_company_consultant(
         profile_image_url=payload.profile_image_url.strip(),
         is_online=payload.is_online,
         offers_in_person=payload.offers_in_person,
-        is_verified=True,
+        is_verified=payload.approval_status == "approved",
         is_available=payload.is_available,
     )
     user_profile = UserProfile(
@@ -978,7 +987,8 @@ def create_company_consultant(
         "email": account.email,
         "role": role_name,
         "slug": slug,
-        "is_verified": True,
+        "is_verified": profile.is_verified,
+        "approval_status": payload.approval_status,
     }
 
 
@@ -989,13 +999,64 @@ def consultant_import_template(
     workbook = Workbook()
     sheet = workbook.active
     sheet.title = "consultants"
-    sheet.append(["consultant_type", "full_name", "email", "initial_password", "phone", "professional_title", "bio", "specialties", "skills", "qualifications", "years_experience", "consultation_price", "city", "office_address", "is_online", "offers_in_person", "is_available"])
-    sheet.append(["independent", "نمونه مشاور", "advisor@example.com", "ChangeMe123!", "09120000000", "مشاور ارشد مالیاتی", "معرفی کوتاه و سوابق مشاور", "ارزش افزوده، مالیات عملکرد", "تنظیم لایحه، حسابرسی", "کارشناسی ارشد و گواهی‌های حرفه‌ای", 8, 500000, "شیراز", "آدرس دفتر", True, True, True])
+    sheet.append(["consultant_type", "full_name", "email", "initial_password", "phone", "professional_title", "bio", "specialties", "skills", "qualifications", "education", "certifications", "work_history", "years_experience", "consultation_price", "city", "office_address", "is_online", "offers_in_person", "is_available", "approval_status"])
+    sheet.append(["independent", "نمونه مشاور", "advisor@example.com", "ChangeMe123!", "09120000000", "مشاور ارشد مالیاتی", "معرفی کوتاه و سوابق مشاور", "ارزش افزوده، مالیات عملکرد", "تنظیم لایحه، حسابرسی", "صلاحیت‌های حرفه‌ای", "کارشناسی ارشد حسابداری", "گواهی مشاور مالیاتی", "۸ سال سابقه مشاوره", 8, 500000, "شیراز", "آدرس دفتر", True, True, True, "pending"])
     sheet.freeze_panes = "A2"
+    guide = workbook.create_sheet("راهنمای فارسی")
+    guide.append(["ستون", "راهنما"])
+    guide.append(["consultant_type", "independent برای مستقل و company برای شرکتی"])
+    guide.append(["specialties / skills", "موارد را با ویرگول جدا کنید"])
+    guide.append(["approval_status", "approved برای تأیید فوری و pending برای صف بررسی"])
+    guide.append(["initial_password", "حداقل ۸ کاراکتر؛ تغییر در ورود اول الزامی است"])
     stream = BytesIO()
     workbook.save(stream)
     stream.seek(0)
     return StreamingResponse(stream, media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", headers={"Content-Disposition": 'attachment; filename="consultants-import-template.xlsx"'})
+
+
+@router.post("/manage/profiles/{consultant_id}/documents", status_code=201)
+async def upload_consultant_document(
+    consultant_id: str,
+    request: Request,
+    _: Annotated[User, Depends(require_permissions("consultations:manage"))],
+    session: Annotated[Session, Depends(get_session)],
+    file: Annotated[UploadFile, File(...)],
+    title: Annotated[str, Form(min_length=3, max_length=200)],
+    document_type: Annotated[str, Form(max_length=60)] = "other",
+    description: Annotated[str, Form(max_length=3000)] = "",
+):
+    profile = session.get(ConsultantProfile, consultant_id)
+    if profile is None:
+        raise HTTPException(404, "مشاور پیدا نشد.")
+    data = await file.read(20 * 1024 * 1024 + 1)
+    try:
+        validated = validate_upload(file.filename or "", file.content_type, data, 20 * 1024 * 1024)
+    except FileValidationError as error:
+        raise HTTPException(422, str(error)) from None
+    storage: ObjectStorage = request.app.state.storage
+    key = f"user-documents/{consultant_id}/{uuid.uuid4().hex}{validated.extension}"
+    storage.put(key, validated.data, validated.mime_type)
+    item = UserDocument(user_id=consultant_id, title=title.strip(), document_type=document_type, description=description.strip(), purpose="consultant_verification", intended_reviewer="consultant_management", original_filename=validated.filename, storage_key=key, mime_type=validated.mime_type, file_size=len(validated.data))
+    session.add(item)
+    if document_type == "profile_photo":
+        if not validated.mime_type.startswith("image/"):
+            storage.delete(key)
+            raise HTTPException(422, "عکس پروفایل باید فایل تصویری باشد.")
+        profile.profile_image_url = f"/api/backend/api/v1/consultations/public/advisors/{profile.slug}/photo"
+    session.commit()
+    return {"id": item.id, "title": item.title, "filename": item.original_filename}
+
+
+@router.get("/public/advisors/{slug}/photo")
+def public_consultant_photo(slug: str, request: Request, session: Annotated[Session, Depends(get_session)]):
+    profile = session.scalar(select(ConsultantProfile).where(ConsultantProfile.slug == slug, ConsultantProfile.deleted_at.is_(None)))
+    if profile is None:
+        raise HTTPException(404, "تصویر مشاور پیدا نشد.")
+    item = session.scalar(select(UserDocument).where(UserDocument.user_id == profile.user_id, UserDocument.document_type == "profile_photo").order_by(UserDocument.created_at.desc()))
+    if item is None:
+        raise HTTPException(404, "تصویر مشاور پیدا نشد.")
+    storage: ObjectStorage = request.app.state.storage
+    return StreamingResponse(BytesIO(storage.get(item.storage_key)), media_type=item.mime_type, headers={"Cache-Control": "public, max-age=3600"})
 
 
 @router.post("/manage/consultants-import")
@@ -1030,14 +1091,24 @@ async def import_consultants(
                 if session.scalar(select(User.id).where(func.lower(User.email) == email)):
                     raise ValueError("ایمیل قبلاً ثبت شده است")
                 consultant_type = str(data.get("consultant_type") or "independent").strip().lower()
+                approval_status = str(data.get("approval_status") or "pending").strip().lower()
+                password = str(data.get("initial_password") or "")
+                if consultant_type not in {"independent", "company"}:
+                    raise ValueError("نوع مشاور باید independent یا company باشد")
+                if approval_status not in {"approved", "pending"}:
+                    raise ValueError("وضعیت تأیید باید approved یا pending باشد")
+                if not email or "@" not in email:
+                    raise ValueError("ایمیل معتبر نیست")
+                if len(password) < 8:
+                    raise ValueError("رمز اولیه باید حداقل ۸ کاراکتر باشد")
                 role = session.scalar(select(Role).where(Role.name == ("company_expert" if consultant_type == "company" else "tax_expert")))
                 if role is None:
                     raise ValueError("نقش مشاور در سامانه فعال نیست")
                 user_id = str(uuid.uuid4())
                 list_value = lambda key: [item.strip() for item in str(data.get(key) or "").replace(",", "،").split("،") if item.strip()]
                 boolean = lambda key, default=True: str(data.get(key) if data.get(key) is not None else default).strip().lower() in {"true", "1", "yes", "بله"}
-                account = User(id=user_id, email=email, email_verified_at=datetime.now(timezone.utc), password_hash=security.hash_password(str(data.get("initial_password") or "")), full_name=str(data.get("full_name") or "").strip(), account_tier="normal", is_active=True, must_change_password=True, roles=[role])
-                profile = ConsultantProfile(user_id=user_id, slug=f"{consultant_type}-{uuid.uuid4().hex[:12]}", consultant_type=consultant_type, professional_title=str(data.get("professional_title") or "").strip(), bio=str(data.get("bio") or "").strip(), specialties=list_value("specialties"), skills=list_value("skills"), qualifications=str(data.get("qualifications") or "").strip(), years_experience=int(data.get("years_experience") or 0), consultation_price=int(data.get("consultation_price") or 0), city=str(data.get("city") or "").strip(), office_address=str(data.get("office_address") or "").strip(), is_online=boolean("is_online"), offers_in_person=boolean("offers_in_person", False), is_verified=True, is_available=boolean("is_available"))
+                account = User(id=user_id, email=email, email_verified_at=datetime.now(timezone.utc), password_hash=security.hash_password(password), full_name=str(data.get("full_name") or "").strip(), account_tier="normal", is_active=True, must_change_password=True, roles=[role])
+                profile = ConsultantProfile(user_id=user_id, slug=f"{consultant_type}-{uuid.uuid4().hex[:12]}", consultant_type=consultant_type, professional_title=str(data.get("professional_title") or "").strip(), bio=str(data.get("bio") or "").strip(), specialties=list_value("specialties"), skills=list_value("skills"), qualifications=str(data.get("qualifications") or "").strip(), education=str(data.get("education") or "").strip(), certifications=str(data.get("certifications") or "").strip(), work_history=str(data.get("work_history") or "").strip(), years_experience=int(data.get("years_experience") or 0), consultation_price=int(data.get("consultation_price") or 0), city=str(data.get("city") or "").strip(), office_address=str(data.get("office_address") or "").strip(), is_online=boolean("is_online"), offers_in_person=boolean("offers_in_person", False), is_verified=approval_status == "approved", is_available=boolean("is_available"))
                 user_profile = UserProfile(user_id=user_id, phone=str(data.get("phone") or "").strip(), city=profile.city, job_title=profile.professional_title, taxpayer_type="legal", bio=profile.bio, referral_code=uuid.uuid4().hex[:10].upper())
                 session.add_all([account, profile, user_profile])
                 session.flush()
