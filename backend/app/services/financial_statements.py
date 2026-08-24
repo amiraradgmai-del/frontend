@@ -250,11 +250,18 @@ class AccountMappingService:
                 matches.append((match, confidence))
             match, confidence = max(matches, key=lambda item: item[1])
             fallback = self._fallback(row.general_code)
-            target_field_id = match.target_field_id if match else fallback[0] if fallback else None
-            amount_source = match.amount_source if match else "net_closing"
-            sign_multiplier = match.sign_multiplier if match else fallback[1] if fallback else 1
-            if fallback and confidence < 90:
+            if fallback:
+                # Standard chart-of-account codes are authoritative. This also
+                # prevents a stale, overly broad user rule from remapping every
+                # account in a later import.
+                match = None
+                target_field_id, sign_multiplier = fallback
+                amount_source = "net_closing"
                 confidence = 95
+            else:
+                target_field_id = match.target_field_id if match else None
+                amount_source = match.amount_source if match else "net_closing"
+                sign_multiplier = match.sign_multiplier if match else 1
             status = "mapped" if confidence >= 90 else "needs_review" if confidence >= 70 else "unmapped"
             decision = self.session.scalar(select(AccountMappingDecision).where(AccountMappingDecision.import_row_id == row.id)) or AccountMappingDecision(import_row_id=row.id)
             decision.rule_id = match.id if match else None; decision.target_field_id = target_field_id
