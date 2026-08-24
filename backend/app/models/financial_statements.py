@@ -24,6 +24,14 @@ class FinancialOrganization(Base):
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_uuid)
     name: Mapped[str] = mapped_column(String(240), index=True)
     national_id: Mapped[str] = mapped_column(String(32), default="", index=True)
+    entity_type: Mapped[str] = mapped_column(String(24), default="company")
+    economic_code: Mapped[str] = mapped_column(String(32), default="")
+    registration_number: Mapped[str] = mapped_column(String(32), default="")
+    tax_file_number: Mapped[str] = mapped_column(String(64), default="")
+    province: Mapped[str] = mapped_column(String(80), default="")
+    city: Mapped[str] = mapped_column(String(80), default="")
+    postal_code: Mapped[str] = mapped_column(String(20), default="")
+    address: Mapped[str] = mapped_column(String(500), default="")
     owner_user_id: Mapped[str] = mapped_column(String(36), ForeignKey("users.id", ondelete="RESTRICT"), index=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
 
@@ -36,6 +44,7 @@ class FinancialFiscalYear(Base):
     title: Mapped[str] = mapped_column(String(80))
     start_date: Mapped[date | None] = mapped_column(Date)
     end_date: Mapped[date | None] = mapped_column(Date)
+    status: Mapped[str] = mapped_column(String(24), default="open")
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
 
 

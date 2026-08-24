@@ -12,6 +12,7 @@ from app.services.financial_statements import (
     FinancialStatementCalculationService, convert_money, extract_account,
     normalize_persian_financial, normalized_account_name, parse_amount,
 )
+from app.schemas.financial_statements import FiscalYearCreate, OrganizationCreate
 
 
 def excel_bytes() -> bytes:
@@ -61,3 +62,37 @@ def test_mapping_aggregation_sign_unit_validation_and_versioning(tmp_path):
         second = FinancialStatementCalculationService(session).calculate(import_, "user-1")
         assert (first.version, second.version) == (1, 2)
         assert convert_money(Decimal("1000000"), "rial", "million_rial") == 1
+
+
+def test_complete_workspace_inputs_and_money_units():
+    organization = OrganizationCreate(
+        entity_type="company",
+        name="شرکت نمونه",
+        national_id="10101234567",
+        economic_code="411111111111",
+        registration_number="12345",
+        tax_file_number="987654",
+        province="تهران",
+        city="تهران",
+        postal_code="1234567890",
+        address="تهران، خیابان نمونه",
+    )
+    assert organization.entity_type == "company"
+    assert organization.postal_code == "1234567890"
+
+    fiscal_year = FiscalYearCreate(
+        organization_id="organization-1",
+        title="سال مالی ۱۴۰۵",
+        start_date="2026-03-21",
+        end_date="2027-03-20",
+        status="open",
+    )
+    assert fiscal_year.status == "open"
+
+    amount = Decimal("1000000")
+    assert convert_money(amount, "rial", "rial") == amount
+    assert convert_money(amount, "toman", "rial") == Decimal("10000000")
+    assert convert_money(amount, "thousand_rial", "rial") == Decimal("1000000000")
+    assert convert_money(amount, "thousand_toman", "rial") == Decimal("10000000000")
+    assert convert_money(amount, "million_rial", "rial") == Decimal("1000000000000")
+    assert convert_money(amount, "million_toman", "rial") == Decimal("10000000000000")

@@ -38,19 +38,21 @@ def wait_for_port(port: int, timeout: int = 25) -> None:
 def main() -> None:
     stamp = datetime.now(timezone.utc).strftime("%Y%m%d-%H%M%S-%f")
     work = HOME / f".release-{stamp}"
-    backup = HOME / "backups" / f"chakah-{stamp}"
     work.mkdir()
-    backup.mkdir(parents=True)
     safe_extract(work)
 
     active_web = HOME / "chakah-web"
-    backup_web = backup / "chakah-web"
+    previous_web = work / "chakah-web-previous"
     # Passenger can leave orphaned Next workers after repeated releases. Stop
     # only this account's stale web workers before swapping the application.
     subprocess.run(["pkill", "-u", "magnbxua", "-f", "next-server"], check=False)
     time.sleep(2)
-    active_web.rename(backup_web)
-    (work / "chakah-web-next").rename(active_web)
+    active_web.rename(previous_web)
+    try:
+        (work / "chakah-web-next").rename(active_web)
+    except Exception:
+        previous_web.rename(active_web)
+        raise
 
     backend_release = work / "backend-release"
     shutil.copytree(backend_release / "app", HOME / "backend" / "app", dirs_exist_ok=True)
@@ -59,16 +61,6 @@ def main() -> None:
         source = backend_release / name
         if source.exists():
             shutil.copy2(source, HOME / "backend" / name)
-
-    dependencies = subprocess.run(
-        [str(PYTHON), "-m", "pip", "install", "--disable-pip-version-check", "."],
-        cwd=HOME / "backend",
-        capture_output=True,
-        text=True,
-        timeout=300,
-    )
-    if dependencies.returncode:
-        raise RuntimeError(dependencies.stderr or dependencies.stdout)
 
     migration = subprocess.run(
         [str(PYTHON), "-m", "alembic", "upgrade", "head"],

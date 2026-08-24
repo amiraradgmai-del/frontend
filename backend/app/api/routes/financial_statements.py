@@ -64,20 +64,28 @@ def organizations(user: Annotated[User, Depends(require_permissions("financial_s
             session.add(FinancialFiscalYear(organization_id=item.id, title=f"سال مالی {year}"))
         _audit(session, user, "financial.defaults_created", "financial_organization", item.id)
         session.commit(); items = [item]
-    return [{"id": x.id, "name": x.name, "national_id": x.national_id} for x in items]
+    return [{"id": x.id, "name": x.name, "national_id": x.national_id, "entity_type": x.entity_type, "economic_code": x.economic_code, "registration_number": x.registration_number, "tax_file_number": x.tax_file_number, "province": x.province, "city": x.city, "postal_code": x.postal_code, "address": x.address} for x in items]
 
 
 @router.post("/organizations", status_code=201)
 def create_organization(payload: OrganizationCreate, user: Annotated[User, Depends(require_permissions("financial_statements:upload"))], session: Annotated[Session, Depends(get_session)]):
-    item = FinancialOrganization(name=normalize_persian_financial(payload.name), national_id=payload.national_id.strip(), owner_user_id=user.id)
+    values = payload.model_dump()
+    values["name"] = normalize_persian_financial(values["name"])
+    for key in ("national_id", "economic_code", "registration_number", "tax_file_number", "postal_code"):
+        values[key] = re.sub(r"\D", "", values[key].translate(str.maketrans("۰۱۲۳۴۵۶۷۸۹٠١٢٣٤٥٦٧٨٩", "01234567890123456789")))
+    if values["entity_type"] == "company" and values["national_id"] and len(values["national_id"]) != 11:
+        raise HTTPException(422, "شناسه ملی شرکت باید ۱۱ رقم باشد")
+    if values["postal_code"] and len(values["postal_code"]) != 10:
+        raise HTTPException(422, "کد پستی باید ۱۰ رقم باشد")
+    item = FinancialOrganization(**values, owner_user_id=user.id)
     session.add(item); session.flush(); _audit(session, user, "financial.organization_created", "financial_organization", item.id); session.commit()
-    return {"id": item.id, "name": item.name, "national_id": item.national_id}
+    return {"id": item.id, **payload.model_dump()}
 
 
 @router.get("/fiscal-years")
 def fiscal_years(organization_id: str, user: Annotated[User, Depends(require_permissions("financial_statements:view"))], session: Annotated[Session, Depends(get_session)]):
     _owns(session, user, organization_id)
-    return [{"id": x.id, "title": x.title, "start_date": x.start_date, "end_date": x.end_date} for x in session.scalars(select(FinancialFiscalYear).where(FinancialFiscalYear.organization_id == organization_id).order_by(FinancialFiscalYear.end_date.desc()))]
+    return [{"id": x.id, "title": x.title, "start_date": x.start_date, "end_date": x.end_date, "status": x.status} for x in session.scalars(select(FinancialFiscalYear).where(FinancialFiscalYear.organization_id == organization_id).order_by(FinancialFiscalYear.end_date.desc()))]
 
 
 @router.post("/fiscal-years", status_code=201)
@@ -85,7 +93,7 @@ def create_fiscal_year(payload: FiscalYearCreate, user: Annotated[User, Depends(
     _owns(session, user, payload.organization_id)
     if payload.start_date and payload.end_date and payload.end_date < payload.start_date: raise HTTPException(422, "تاریخ پایان نمی‌تواند قبل از تاریخ شروع باشد")
     item = FinancialFiscalYear(**payload.model_dump()); session.add(item); session.flush(); _audit(session, user, "financial.fiscal_year_created", "financial_fiscal_year", item.id); session.commit()
-    return {"id": item.id, "title": item.title, "start_date": item.start_date, "end_date": item.end_date}
+    return {"id": item.id, "title": item.title, "start_date": item.start_date, "end_date": item.end_date, "status": item.status}
 
 
 @router.get("/fields")

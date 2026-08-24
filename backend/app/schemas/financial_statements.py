@@ -8,6 +8,14 @@ from pydantic import BaseModel, Field
 class OrganizationCreate(BaseModel):
     name: str = Field(min_length=2, max_length=240)
     national_id: str = Field(default="", max_length=32)
+    entity_type: Literal["individual", "company"] = "company"
+    economic_code: str = Field(default="", max_length=32)
+    registration_number: str = Field(default="", max_length=32)
+    tax_file_number: str = Field(default="", max_length=64)
+    province: str = Field(default="", max_length=80)
+    city: str = Field(default="", max_length=80)
+    postal_code: str = Field(default="", max_length=20)
+    address: str = Field(default="", max_length=500)
 
 
 class FiscalYearCreate(BaseModel):
@@ -15,6 +23,7 @@ class FiscalYearCreate(BaseModel):
     title: str = Field(min_length=2, max_length=80)
     start_date: date | None = None
     end_date: date | None = None
+    status: Literal["open", "closed"] = "open"
 
 
 class MappingUpdate(BaseModel):
