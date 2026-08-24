@@ -23,7 +23,14 @@ from app.models.financial_statements import (
 )
 
 PERSIAN_DIGITS = str.maketrans("۰۱۲۳۴۵۶۷۸۹٠١٢٣٤٥٦٧٨٩", "01234567890123456789")
-ALLOWED_UNITS = {"rial": Decimal(1), "toman": Decimal(10), "thousand_rial": Decimal(1000), "million_rial": Decimal(1_000_000)}
+ALLOWED_UNITS = {
+    "rial": Decimal(1),
+    "toman": Decimal(10),
+    "thousand_rial": Decimal(1_000),
+    "thousand_toman": Decimal(10_000),
+    "million_rial": Decimal(1_000_000),
+    "million_toman": Decimal(10_000_000),
+}
 HEADER_ALIASES = {
     "general": ("کل", "حساب کل"), "subsidiary": ("معین", "حساب معین"),
     "detail": ("تفصیلی", "تفضیلی", "حساب تفصیلی", "حساب تفضیلی"),

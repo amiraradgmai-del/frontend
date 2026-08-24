@@ -30,11 +30,19 @@ ROLE_PERMISSIONS = {
         "profile:read",
         "profile:update",
         "consultations:handle",
+        "financial_statements:view", "financial_statements:upload",
+        "financial_statements:map", "financial_statements:adjust",
+        "financial_statements:calculate", "financial_statements:finalize",
+        "financial_statements:export",
     },
     "company_expert": {
         "profile:read",
         "profile:update",
         "consultations:handle",
+        "financial_statements:view", "financial_statements:upload",
+        "financial_statements:map", "financial_statements:adjust",
+        "financial_statements:calculate", "financial_statements:finalize",
+        "financial_statements:export",
     },
     "content_manager": {
         "profile:read",
@@ -92,6 +100,10 @@ ROLE_PERMISSIONS = {
         "consultations:handle",
         "tickets:manage",
         "documents:review",
+        "financial_statements:view", "financial_statements:upload",
+        "financial_statements:map", "financial_statements:adjust",
+        "financial_statements:calculate", "financial_statements:finalize",
+        "financial_statements:export",
     },
 }
 

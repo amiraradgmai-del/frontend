@@ -55,7 +55,16 @@ def _audit(session: Session, user: User, action: str, resource: str, resource_id
 def organizations(user: Annotated[User, Depends(require_permissions("financial_statements:view"))], session: Annotated[Session, Depends(get_session)]):
     query = select(FinancialOrganization).order_by(FinancialOrganization.created_at.desc())
     if "users:manage" not in permission_codes(user): query = query.where(FinancialOrganization.owner_user_id == user.id)
-    return [{"id": x.id, "name": x.name, "national_id": x.national_id} for x in session.scalars(query)]
+    items = list(session.scalars(query))
+    if not items:
+        item = FinancialOrganization(name=f"پرونده مالی {user.full_name}", national_id="", owner_user_id=user.id)
+        session.add(item); session.flush()
+        current_year = datetime.now(timezone.utc).year - 621
+        for year in range(current_year, current_year - 3, -1):
+            session.add(FinancialFiscalYear(organization_id=item.id, title=f"سال مالی {year}"))
+        _audit(session, user, "financial.defaults_created", "financial_organization", item.id)
+        session.commit(); items = [item]
+    return [{"id": x.id, "name": x.name, "national_id": x.national_id} for x in items]
 
 
 @router.post("/organizations", status_code=201)
@@ -97,7 +106,7 @@ async def upload_import(request: Request, user: Annotated[User, Depends(require_
     if year is None or year.organization_id != organization_id: raise HTTPException(422, "سال مالی معتبر نیست")
     extension = "." + file.filename.rsplit(".", 1)[-1].lower() if file.filename and "." in file.filename else ""
     if extension not in ALLOWED or file.content_type not in ALLOWED[extension]: raise HTTPException(415, "فقط فایل Excel یا PDF معتبر قابل پذیرش است")
-    if money_unit not in {"rial", "toman", "thousand_rial", "million_rial"}: raise HTTPException(422, "واحد پول باید مشخص شود")
+    if money_unit not in {"rial", "toman", "thousand_rial", "thousand_toman", "million_rial", "million_toman"}: raise HTTPException(422, "واحد پول باید مشخص شود")
     data = await file.read(MAX_FILE_SIZE + 1)
     if not data: raise HTTPException(422, "فایل خالی است")
     if len(data) > MAX_FILE_SIZE: raise HTTPException(413, "حجم فایل بیشتر از حد مجاز است")

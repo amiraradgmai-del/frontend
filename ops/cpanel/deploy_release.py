@@ -80,6 +80,16 @@ def main() -> None:
     if migration.returncode:
         raise RuntimeError(migration.stderr or migration.stdout)
 
+    permissions = subprocess.run(
+        [str(PYTHON), "-c", "from app.core.config import get_settings; from app.db.session import Database; from app.repositories.auth import seed_rbac; d=Database(get_settings().database_url); s=d.session_factory(); seed_rbac(s); s.close(); d.dispose()"],
+        cwd=HOME / "backend",
+        capture_output=True,
+        text=True,
+        timeout=120,
+    )
+    if permissions.returncode:
+        raise RuntimeError(permissions.stderr or permissions.stdout)
+
     subprocess.run(["pkill", "-f", "uvicorn app.main:create_app"], check=False)
     time.sleep(1)
     process = subprocess.Popen(

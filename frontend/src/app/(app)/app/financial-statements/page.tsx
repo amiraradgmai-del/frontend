@@ -18,7 +18,7 @@ type Validation = { code: string; status: string; difference: number; tolerance:
 
 const statusLabel: Record<string, string> = { uploaded: "بارگذاری‌شده", parsing: "در حال پردازش", mapping_required: "نیازمند نگاشت", ready_to_calculate: "آماده محاسبه", calculated: "محاسبه‌شده", validation_failed: "کنترل ناموفق", failed: "پردازش ناموفق", mapped: "نگاشت‌شده", needs_review: "نیازمند بررسی", unmapped: "بدون نگاشت", ignored: "نادیده گرفته‌شده", finalized: "نهایی‌شده" };
 const statementLabel: Record<string, string> = { BS: "صورت وضعیت مالی", PL: "صورت سود و زیان", CI: "سود و زیان جامع", EQ: "تغییرات حقوق مالکانه", CF: "جریان‌های نقدی" };
-const moneyLabel: Record<string, string> = { rial: "ریال", toman: "تومان", thousand_rial: "هزار ریال", million_rial: "میلیون ریال" };
+const moneyLabel: Record<string, string> = { rial: "ریال", toman: "تومان", thousand_rial: "هزار ریال", thousand_toman: "هزار تومان", million_rial: "میلیون ریال", million_toman: "میلیون تومان" };
 const number = (value: number | string) => Number(value || 0).toLocaleString("fa-IR");
 
 export default function FinancialStatementsPage() {
@@ -117,9 +117,9 @@ export default function FinancialStatementsPage() {
     <div className="grid gap-6 xl:grid-cols-[1fr_320px]">
       <div className="space-y-6">
         <Card><CardHeader><CardTitle>۱. شرکت، سال مالی و فایل تراز</CardTitle></CardHeader><CardContent className="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
-          <div className="flex gap-2"><select className="h-10 min-w-0 flex-1 rounded-lg border bg-white px-3" value={organizationId} onChange={(e) => setOrganizationId(e.target.value)}><option value="">انتخاب شرکت</option>{organizations.map((x) => <option key={x.id} value={x.id}>{x.name}</option>)}</select><Button variant="outline" size="icon" onClick={createOrganization}><Plus /></Button></div>
-          <div className="flex gap-2"><select className="h-10 min-w-0 flex-1 rounded-lg border bg-white px-3" value={yearId} onChange={(e) => setYearId(e.target.value)}><option value="">انتخاب سال مالی</option>{years.map((x) => <option key={x.id} value={x.id}>{x.title}</option>)}</select><Button variant="outline" size="icon" onClick={createYear}><Plus /></Button></div>
-          <select className="h-10 rounded-lg border bg-white px-3" value={moneyUnit} onChange={(e) => setMoneyUnit(e.target.value)}>{Object.entries(moneyLabel).map(([key, label]) => <option key={key} value={key}>{label}</option>)}</select>
+          <div><label className="mb-1 block text-xs font-bold text-slate-600">شخص یا شرکت</label><div className="flex gap-2"><select aria-label="انتخاب شخص یا شرکت" className="h-10 min-w-0 flex-1 rounded-lg border bg-white px-3" value={organizationId} onChange={(e) => setOrganizationId(e.target.value)}><option value="" disabled>انتخاب شخص یا شرکت</option>{organizations.map((x) => <option key={x.id} value={x.id}>{x.name}</option>)}</select><Button title="افزودن شرکت" variant="outline" size="icon" onClick={createOrganization}><Plus /></Button></div></div>
+          <div><label className="mb-1 block text-xs font-bold text-slate-600">سال مالی</label><div className="flex gap-2"><select aria-label="انتخاب سال مالی" disabled={!organizationId} className="h-10 min-w-0 flex-1 rounded-lg border bg-white px-3 disabled:bg-slate-100" value={yearId} onChange={(e) => setYearId(e.target.value)}><option value="" disabled>{organizationId ? "انتخاب سال مالی" : "ابتدا شرکت را انتخاب کنید"}</option>{years.map((x) => <option key={x.id} value={x.id}>{x.title}</option>)}</select><Button title="افزودن سال مالی" disabled={!organizationId} variant="outline" size="icon" onClick={createYear}><Plus /></Button></div></div>
+          <div><label className="mb-1 block text-xs font-bold text-slate-600">واحد مبالغ داخل فایل</label><select aria-label="واحد مبالغ داخل فایل" className="h-10 w-full rounded-lg border bg-white px-3" value={moneyUnit} onChange={(e) => setMoneyUnit(e.target.value)}>{Object.entries(moneyLabel).map(([key, label]) => <option key={key} value={key}>{label}</option>)}</select></div>
           <Input type="file" accept=".xlsx,.xls,.pdf" onChange={(e) => setFile(e.target.files?.[0] ?? null)} />
           <Button className="md:col-span-2 xl:col-span-4" onClick={upload} disabled={!!busy}><Upload /> {busy === "upload" ? "در حال بارگذاری..." : "بارگذاری امن فایل"}</Button>
         </CardContent></Card>
