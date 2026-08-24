@@ -16,6 +16,7 @@ import {
   CreditCard,
   Database,
   FileText,
+  FileSpreadsheet,
   Headphones,
   History,
   LayoutDashboard,
@@ -104,6 +105,11 @@ const navigation = [
     href: "/app/documents",
     label: "اسناد من",
     icon: UploadCloud,
+  },
+  {
+    href: "/app/financial-statements",
+    label: "تهیه صورت‌های مالی",
+    icon: FileSpreadsheet,
   },
   {
     href: "/app/tickets",

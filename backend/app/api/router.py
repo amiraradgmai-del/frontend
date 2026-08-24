@@ -11,6 +11,7 @@ from app.api.routes.tools import router as tools_router, admin_router as analyti
 from app.api.routes.site import router as site_router
 from app.api.routes.legal import router as legal_router, manage_router as legal_manage_router
 from app.api.routes.enhancements import router as enhancements_router
+from app.api.routes.financial_statements import router as financial_statements_router
 
 api_router = APIRouter()
 api_router.include_router(system_router)
@@ -27,3 +28,4 @@ api_router.include_router(site_router)
 api_router.include_router(legal_router)
 api_router.include_router(legal_manage_router)
 api_router.include_router(enhancements_router)
+api_router.include_router(financial_statements_router)

@@ -10,7 +10,7 @@ from zipfile import ZipFile
 
 
 HOME = Path("/home/magnbxua")
-ARCHIVE = HOME / "chakah-cpanel-deployment-20260810-final.zip"
+ARCHIVE = HOME / "chakah-cpanel-financial-statements-20260824.zip"
 PYTHON = HOME / "backend" / ".venv" / "bin" / "python"
 
 

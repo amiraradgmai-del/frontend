@@ -20,7 +20,12 @@ from app.models.portal import UserProfile
 
 
 ROLE_PERMISSIONS = {
-    "user": {"profile:read", "profile:update"},
+    "user": {
+        "profile:read", "profile:update", "financial_statements:view",
+        "financial_statements:upload", "financial_statements:map",
+        "financial_statements:adjust", "financial_statements:calculate",
+        "financial_statements:finalize", "financial_statements:export",
+    },
     "tax_expert": {
         "profile:read",
         "profile:update",
@@ -48,6 +53,10 @@ ROLE_PERMISSIONS = {
         "notifications:manage",
         "payments:manage",
         "site:manage",
+        "financial_statements:view", "financial_statements:upload",
+        "financial_statements:map", "financial_statements:adjust",
+        "financial_statements:calculate", "financial_statements:finalize",
+        "financial_statements:export", "financial_statements:manage_mapping",
     },
     "system_admin": {
         "profile:read",
@@ -65,6 +74,10 @@ ROLE_PERMISSIONS = {
         "chats:manage",
         "site:manage",
         "notifications:manage",
+        "financial_statements:view", "financial_statements:upload",
+        "financial_statements:map", "financial_statements:adjust",
+        "financial_statements:calculate", "financial_statements:finalize",
+        "financial_statements:export", "financial_statements:manage_mapping",
     },
     "support_admin": {
         "profile:read",

@@ -188,7 +188,14 @@ def test_register_hashes_password_and_assigns_minimal_role(app_client) -> None:
     assert response.json()["email"] == "user@example.com"
     assert response.json()["roles"] == ["user"]
     assert response.json()["account_tier"] == "normal"
-    assert response.json()["permissions"] == ["profile:read", "profile:update"]
+    permissions = set(response.json()["permissions"])
+    assert {"profile:read", "profile:update"}.issubset(permissions)
+    assert {
+        "financial_statements:view", "financial_statements:upload",
+        "financial_statements:map", "financial_statements:calculate",
+        "financial_statements:adjust", "financial_statements:finalize",
+        "financial_statements:export",
+    }.issubset(permissions)
 
     with app.state.database.session() as session:
         user = session.scalar(select(User))

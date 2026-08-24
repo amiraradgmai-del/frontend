@@ -7,7 +7,7 @@ from zipfile import ZIP_DEFLATED, ZipFile
 
 ROOT = Path(__file__).resolve().parents[2]
 STAGING = ROOT / ".cpanel-release"
-ARCHIVE = ROOT / "chakah-cpanel-deployment-20260810-final.zip"
+ARCHIVE = ROOT / "chakah-cpanel-financial-statements-20260824.zip"
 
 
 def copy_tree(source: Path, target: Path) -> None:
