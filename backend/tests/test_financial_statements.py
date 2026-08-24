@@ -8,7 +8,7 @@ from sqlalchemy.orm import Session
 from app.db.base import Base
 from app.models.financial_statements import *
 from app.services.financial_statements import (
-    AccountMappingService, ExcelTrialBalanceParser,
+    AccountMappingService, ExcelTrialBalanceParser, LegacyExcelTrialBalanceParser,
     FinancialStatementCalculationService, convert_money, extract_account,
     normalize_persian_financial, normalized_account_name, parse_amount,
 )
@@ -38,6 +38,22 @@ def test_excel_parser_detects_variable_header_position():
     assert rows[1].closing_debit == Decimal("50000000")
 
 
+def test_fastreport_spreadsheet_xml_with_xls_extension():
+    data = """<?xml version="1.0"?>
+    <Workbook xmlns="urn:schemas-microsoft-com:office:spreadsheet"
+      xmlns:ss="urn:schemas-microsoft-com:office:spreadsheet">
+      <Worksheet ss:Name="Page 1"><Table>
+        <Row><Cell ss:Index="2"><Data ss:Type="String">مانده بد</Data></Cell><Cell><Data ss:Type="String">بس طی دوره</Data></Cell><Cell><Data ss:Type="String">بد طی دوره</Data></Cell><Cell><Data ss:Type="String">بس اول دوره</Data></Cell><Cell ss:Index="7"><Data ss:Type="String">بد اول دوره</Data></Cell><Cell ss:Index="9"><Data ss:Type="String">تفصیلی</Data></Cell><Cell><Data ss:Type="String">معین</Data></Cell><Cell ss:Index="13"><Data ss:Type="String">کـل</Data></Cell></Row>
+        <Row><Cell ss:Index="2"><Data ss:Type="Number">1000</Data></Cell><Cell><Data ss:Type="Number">0</Data></Cell><Cell><Data ss:Type="Number">0</Data></Cell><Cell><Data ss:Type="Number">0</Data></Cell><Cell ss:Index="7"><Data ss:Type="Number">1000</Data></Cell><Cell ss:Index="9"><Data ss:Type="String">صندوق</Data></Cell><Cell><Data ss:Type="String">111003 - تنخواه</Data></Cell><Cell ss:Index="13"><Data ss:Type="String">1110 - موجودی نقد و بانک</Data></Cell></Row>
+      </Table></Worksheet>
+    </Workbook>""".encode()
+    rows = LegacyExcelTrialBalanceParser().parse(data)
+    assert len(rows) == 1
+    assert rows[0].general_code == "1110"
+    assert rows[0].closing_debit == Decimal("1000")
+    assert AccountMappingService._fallback(rows[0].general_code) == ("BS.CASH", 1)
+
+
 def test_mapping_aggregation_sign_unit_validation_and_versioning(tmp_path):
     engine = create_engine(f"sqlite+pysqlite:///{tmp_path / 'financial.db'}")
     Base.metadata.create_all(engine)
@@ -61,7 +77,7 @@ def test_mapping_aggregation_sign_unit_validation_and_versioning(tmp_path):
         assert value.final_value == Decimal("60000000")
         second = FinancialStatementCalculationService(session).calculate(import_, "user-1")
         assert (first.version, second.version) == (1, 2)
-        assert convert_money(Decimal("1000000"), "rial", "million_rial") == 1
+        assert convert_money(Decimal("10"), "toman", "rial") == 100
 
 
 def test_complete_workspace_inputs_and_money_units():
@@ -92,7 +108,3 @@ def test_complete_workspace_inputs_and_money_units():
     amount = Decimal("1000000")
     assert convert_money(amount, "rial", "rial") == amount
     assert convert_money(amount, "toman", "rial") == Decimal("10000000")
-    assert convert_money(amount, "thousand_rial", "rial") == Decimal("1000000000")
-    assert convert_money(amount, "thousand_toman", "rial") == Decimal("10000000000")
-    assert convert_money(amount, "million_rial", "rial") == Decimal("1000000000000")
-    assert convert_money(amount, "million_toman", "rial") == Decimal("10000000000000")

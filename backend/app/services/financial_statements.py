@@ -4,6 +4,7 @@ import hashlib
 import io
 import re
 import unicodedata
+import xml.etree.ElementTree as ET
 from pathlib import Path
 from dataclasses import dataclass
 from decimal import Decimal, InvalidOperation
@@ -26,10 +27,6 @@ PERSIAN_DIGITS = str.maketrans("۰۱۲۳۴۵۶۷۸۹٠١٢٣٤٥٦٧٨٩", "0123
 ALLOWED_UNITS = {
     "rial": Decimal(1),
     "toman": Decimal(10),
-    "thousand_rial": Decimal(1_000),
-    "thousand_toman": Decimal(10_000),
-    "million_rial": Decimal(1_000_000),
-    "million_toman": Decimal(10_000_000),
 }
 HEADER_ALIASES = {
     "general": ("کل", "حساب کل"), "subsidiary": ("معین", "حساب معین"),
@@ -41,11 +38,18 @@ HEADER_ALIASES = {
     "closing_debit": ("مانده بدهکار", "بدهکار پایان دوره"),
     "closing_credit": ("مانده بستانکار", "بستانکار پایان دوره"),
 }
+HEADER_ALIASES["opening_debit"] += ("بد اول دوره",)
+HEADER_ALIASES["opening_credit"] += ("بس اول دوره",)
+HEADER_ALIASES["period_debit"] += ("بد طی دوره",)
+HEADER_ALIASES["period_credit"] += ("بس طی دوره",)
+HEADER_ALIASES["closing_debit"] += ("مانده بد",)
+HEADER_ALIASES["closing_credit"] += ("مانده بس",)
 
 
 def normalize_persian_financial(value: object) -> str:
     text = unicodedata.normalize("NFKC", str(value or ""))
     text = text.translate(PERSIAN_DIGITS).replace("ي", "ی").replace("ك", "ک")
+    text = text.replace("ـ", "")
     text = text.replace("ۀ", "ه").replace("ة", "ه")
     text = re.sub(r"[\u200b-\u200f\u202a-\u202e\ufeff]", "", text)
     text = text.replace("‌", " ").replace("٬", ",")
@@ -131,11 +135,20 @@ def _rows_from_matrix(matrix: list[list[object]]) -> list[ParsedAccountRow]:
             index = columns.get(key)
             return row[index] if index is not None and index < len(row) else None
         general = extract_account(cell("general")); subsidiary = extract_account(cell("subsidiary")); detail = extract_account(cell("detail"))
+        if (
+            normalized_account_name(general[1]) in {"کل", "حساب کل"}
+            and "معین" in normalized_account_name(subsidiary[1])
+        ):
+            continue
         if general != ("", ""): context["general"] = general
         if subsidiary != ("", ""): context["subsidiary"] = subsidiary
         if not any((general[0], subsidiary[0], detail[0], general[1], subsidiary[1], detail[1])):
             continue
         amounts = {key: parse_amount(cell(key)) for key in ("opening_debit", "opening_credit", "period_debit", "period_credit", "closing_debit", "closing_credit")}
+        if "closing_credit" not in columns or "closing_debit" not in columns:
+            net = amounts["opening_debit"] - amounts["opening_credit"] + amounts["period_debit"] - amounts["period_credit"]
+            amounts["closing_debit"] = max(net, Decimal(0))
+            amounts["closing_credit"] = max(-net, Decimal(0))
         if not any(amounts.values()) and not any((detail[0], detail[1])):
             continue
         result.append(ParsedAccountRow(*context["general"], *context["subsidiary"], *detail, **amounts, source_row_number=source_index))
@@ -158,6 +171,8 @@ class ExcelTrialBalanceParser:
 
 class LegacyExcelTrialBalanceParser:
     def parse(self, data: bytes) -> list[ParsedAccountRow]:
+        if data.lstrip().startswith(b"<?xml"):
+            return self._parse_spreadsheet_xml(data)
         try:
             import xlrd
             workbook = xlrd.open_workbook(file_contents=data, on_demand=True)
@@ -169,6 +184,43 @@ class LegacyExcelTrialBalanceParser:
             try: candidates.append(_rows_from_matrix(matrix))
             except ValueError: continue
         if not candidates: raise ValueError("header_not_found")
+        return max(candidates, key=len)
+
+    @staticmethod
+    def _parse_spreadsheet_xml(data: bytes) -> list[ParsedAccountRow]:
+        try:
+            root = ET.fromstring(data)
+        except ET.ParseError as exc:
+            raise ValueError("corrupted_excel") from exc
+        namespace = "urn:schemas-microsoft-com:office:spreadsheet"
+        ss = f"{{{namespace}}}"
+        candidates: list[list[ParsedAccountRow]] = []
+        for worksheet in root.findall(f"{ss}Worksheet"):
+            matrix: list[list[object]] = []
+            table = worksheet.find(f"{ss}Table")
+            if table is None:
+                continue
+            for row in table.findall(f"{ss}Row"):
+                values: list[object] = []
+                position = 1
+                for cell in row.findall(f"{ss}Cell"):
+                    index = cell.get(f"{ss}Index")
+                    if index:
+                        position = int(index)
+                    while len(values) < position - 1:
+                        values.append(None)
+                    value = cell.find(f"{ss}Data")
+                    values.append("" if value is None else "".join(value.itertext()).strip())
+                    merge = int(cell.get(f"{ss}MergeAcross", "0"))
+                    values.extend([None] * merge)
+                    position += merge + 1
+                matrix.append(values)
+            try:
+                candidates.append(_rows_from_matrix(matrix))
+            except ValueError:
+                continue
+        if not candidates:
+            raise ValueError("header_not_found")
         return max(candidates, key=len)
 
 
@@ -192,12 +244,21 @@ class AccountMappingService:
         rules = list(self.session.scalars(select(AccountMappingRule).where(AccountMappingRule.is_active.is_(True), (AccountMappingRule.organization_id == import_.organization_id) | (AccountMappingRule.organization_id.is_(None))).order_by(AccountMappingRule.organization_id.desc(), AccountMappingRule.priority.desc())))
         counts = {"mapped": 0, "needs_review": 0, "unmapped": 0}
         for row in import_.rows:
-            level, code, name = self._identity(row)
-            match, confidence = self._match(rules, import_.organization_id, level, code, name)
+            matches = []
+            for level, code, name in self._identities(row):
+                match, confidence = self._match(rules, import_.organization_id, level, code, name)
+                matches.append((match, confidence))
+            match, confidence = max(matches, key=lambda item: item[1])
+            fallback = self._fallback(row.general_code)
+            target_field_id = match.target_field_id if match else fallback[0] if fallback else None
+            amount_source = match.amount_source if match else "net_closing"
+            sign_multiplier = match.sign_multiplier if match else fallback[1] if fallback else 1
+            if fallback and confidence < 90:
+                confidence = 95
             status = "mapped" if confidence >= 90 else "needs_review" if confidence >= 70 else "unmapped"
             decision = self.session.scalar(select(AccountMappingDecision).where(AccountMappingDecision.import_row_id == row.id)) or AccountMappingDecision(import_row_id=row.id)
-            decision.rule_id = match.id if match else None; decision.target_field_id = match.target_field_id if match else None
-            decision.amount_source = match.amount_source if match else "net_closing"; decision.sign_multiplier = match.sign_multiplier if match else 1
+            decision.rule_id = match.id if match else None; decision.target_field_id = target_field_id
+            decision.amount_source = amount_source; decision.sign_multiplier = sign_multiplier
             decision.confidence = confidence; decision.status = status
             self.session.add(decision); counts[status] += 1
         import_.status = "ready_to_calculate" if counts["unmapped"] == 0 and counts["needs_review"] == 0 else "mapping_required"
@@ -208,6 +269,41 @@ class AccountMappingService:
         if row.detail_code or row.detail_name: return "detailed", row.detail_code, row.detail_name
         if row.subsidiary_code or row.subsidiary_name: return "subsidiary", row.subsidiary_code, row.subsidiary_name
         return "general", row.general_code, row.general_name
+
+    @staticmethod
+    def _identities(row):
+        return (
+            ("detailed", row.detail_code, row.detail_name),
+            ("subsidiary", row.subsidiary_code, row.subsidiary_name),
+            ("general", row.general_code, row.general_name),
+        )
+
+    @staticmethod
+    def _fallback(code: str) -> tuple[str, int] | None:
+        mappings = (
+            ("1110", "BS.CASH", 1),
+            ("1111", "BS.SHORT_TERM_INVESTMENTS", 1),
+            ("1112", "BS.TRADE_RECEIVABLES", 1),
+            ("1113", "BS.TRADE_RECEIVABLES", 1),
+            ("1114", "BS.INVENTORY", 1),
+            ("1115", "BS.INVENTORY", 1),
+            ("1116", "BS.PPE", 1),
+            ("1118", "BS.PREPAYMENTS", 1),
+            ("12", "BS.PPE", 1),
+            ("21", "BS.CURRENT_LIABILITIES", -1),
+            ("22", "BS.NON_CURRENT_LIABILITIES", -1),
+            ("3110", "BS.CAPITAL", -1),
+            ("311", "BS.RETAINED_EARNINGS", -1),
+            ("4112", "PL.OTHER_INCOME", -1),
+            ("4", "PL.OPERATING_REVENUE", -1),
+            ("5", "PL.COST_OF_REVENUE", 1),
+            ("6211", "PL.FINANCE_COST", 1),
+            ("6", "PL.SELLING_ADMIN_EXPENSE", 1),
+        )
+        for prefix, target, sign in mappings:
+            if code.startswith(prefix):
+                return target, sign
+        return None
 
     @staticmethod
     def _match(rules, organization_id, level, code, name):

@@ -114,7 +114,7 @@ async def upload_import(request: Request, user: Annotated[User, Depends(require_
     if year is None or year.organization_id != organization_id: raise HTTPException(422, "سال مالی معتبر نیست")
     extension = "." + file.filename.rsplit(".", 1)[-1].lower() if file.filename and "." in file.filename else ""
     if extension not in ALLOWED or file.content_type not in ALLOWED[extension]: raise HTTPException(415, "فقط فایل Excel یا PDF معتبر قابل پذیرش است")
-    if money_unit not in {"rial", "toman", "thousand_rial", "thousand_toman", "million_rial", "million_toman"}: raise HTTPException(422, "واحد پول باید مشخص شود")
+    if money_unit not in {"rial", "toman"}: raise HTTPException(422, "واحد پول باید ریال یا تومان باشد")
     data = await file.read(MAX_FILE_SIZE + 1)
     if not data: raise HTTPException(422, "فایل خالی است")
     if len(data) > MAX_FILE_SIZE: raise HTTPException(413, "حجم فایل بیشتر از حد مجاز است")

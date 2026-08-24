@@ -18,7 +18,7 @@ type Validation = { code: string; status: string; difference: number; tolerance:
 
 const statusLabel: Record<string, string> = { uploaded: "بارگذاری‌شده", parsing: "در حال پردازش", mapping_required: "نیازمند نگاشت", ready_to_calculate: "آماده محاسبه", calculated: "محاسبه‌شده", validation_failed: "کنترل ناموفق", failed: "پردازش ناموفق", mapped: "نگاشت‌شده", needs_review: "نیازمند بررسی", unmapped: "بدون نگاشت", ignored: "نادیده گرفته‌شده", finalized: "نهایی‌شده" };
 const statementLabel: Record<string, string> = { BS: "صورت وضعیت مالی", PL: "صورت سود و زیان", CI: "سود و زیان جامع", EQ: "تغییرات حقوق مالکانه", CF: "جریان‌های نقدی" };
-const moneyLabel: Record<string, string> = { rial: "ریال", toman: "تومان", thousand_rial: "هزار ریال", thousand_toman: "هزار تومان", million_rial: "میلیون ریال", million_toman: "میلیون تومان" };
+const moneyLabel: Record<string, string> = { rial: "ریال", toman: "تومان" };
 const provinces = ["آذربایجان شرقی", "آذربایجان غربی", "اردبیل", "اصفهان", "البرز", "ایلام", "بوشهر", "تهران", "چهارمحال و بختیاری", "خراسان جنوبی", "خراسان رضوی", "خراسان شمالی", "خوزستان", "زنجان", "سمنان", "سیستان و بلوچستان", "فارس", "قزوین", "قم", "کردستان", "کرمان", "کرمانشاه", "کهگیلویه و بویراحمد", "گلستان", "گیلان", "لرستان", "مازندران", "مرکزی", "هرمزگان", "همدان", "یزد"];
 const number = (value: number | string) => Number(value || 0).toLocaleString("fa-IR");
 
