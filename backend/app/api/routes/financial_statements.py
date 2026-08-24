@@ -7,7 +7,7 @@ from typing import Annotated
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Request, UploadFile
 from fastapi.responses import Response
-from sqlalchemy import func, select
+from sqlalchemy import delete, func, select
 from sqlalchemy.orm import Session
 
 from app.api.dependencies import get_current_user, get_session, permission_codes, require_permissions
@@ -128,6 +128,37 @@ async def upload_import(request: Request, user: Annotated[User, Depends(require_
 
 @router.get("/imports/{import_id}")
 def get_import(import_id: str, user: Annotated[User, Depends(require_permissions("financial_statements:view"))], session: Annotated[Session, Depends(get_session)]): return _summary(session, _import(session, user, import_id))
+
+
+@router.delete("/imports/{import_id}", status_code=204)
+def delete_import(import_id: str, request: Request, user: Annotated[User, Depends(require_permissions("financial_statements:upload"))], session: Annotated[Session, Depends(get_session)]):
+    item = _import(session, user, import_id)
+    source_storage_key = item.storage_key
+    run_ids = list(session.scalars(select(FinancialStatementRun.id).where(FinancialStatementRun.import_id == item.id)))
+    generated_keys: list[str] = []
+    if run_ids:
+        generated_keys = list(session.scalars(select(GeneratedFinancialStatementFile.storage_key).where(GeneratedFinancialStatementFile.run_id.in_(run_ids))))
+        value_ids = list(session.scalars(select(FinancialStatementValue.id).where(FinancialStatementValue.run_id.in_(run_ids))))
+        if value_ids:
+            session.execute(delete(FinancialStatementValueSource).where(FinancialStatementValueSource.value_id.in_(value_ids)))
+        session.execute(delete(FinancialStatementAdjustment).where(FinancialStatementAdjustment.run_id.in_(run_ids)))
+        session.execute(delete(FinancialStatementValidation).where(FinancialStatementValidation.run_id.in_(run_ids)))
+        session.execute(delete(GeneratedFinancialStatementFile).where(GeneratedFinancialStatementFile.run_id.in_(run_ids)))
+        session.execute(delete(FinancialStatementValue).where(FinancialStatementValue.run_id.in_(run_ids)))
+        session.execute(delete(FinancialStatementRun).where(FinancialStatementRun.id.in_(run_ids)))
+    row_ids = list(session.scalars(select(FinancialStatementImportRow.id).where(FinancialStatementImportRow.import_id == item.id)))
+    if row_ids:
+        session.execute(delete(AccountMappingDecision).where(AccountMappingDecision.import_row_id.in_(row_ids)))
+    session.execute(delete(FinancialStatementImportRow).where(FinancialStatementImportRow.import_id == item.id))
+    _audit(session, user, "financial.import_deleted", "financial_statement_import", item.id, {"filename": item.original_filename})
+    session.delete(item)
+    session.commit()
+    for key in [source_storage_key, *generated_keys]:
+        try:
+            request.app.state.storage.delete(key)
+        except FileNotFoundError:
+            pass
+    return Response(status_code=204)
 
 
 @router.post("/imports/{import_id}/parse")

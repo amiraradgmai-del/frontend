@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
-import { AlertTriangle, CheckCircle2, Download, FileSpreadsheet, Loader2, Plus, Search, Upload } from "lucide-react";
+import { AlertTriangle, CheckCircle2, Download, FileSpreadsheet, Loader2, Plus, Search, Trash2, Upload } from "lucide-react";
 import { api, ApiError } from "@/lib/api";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -96,6 +96,16 @@ export default function FinancialStatementsPage() {
     if (!selectedImport) return; setBusy("parse");
     try { const item = await api<ImportSummary>(`api/v1/financial-statements/imports/${selectedImport.id}/parse`, { method: "POST" }); setSelectedImport(item); await openImport(item); await loadBase(); setMessage("تراز خوانده شد؛ حساب‌های نامشخص را بررسی کنید."); } catch (error) { showError(error); } finally { setBusy(""); }
   }
+  async function deleteImport(item: ImportSummary) {
+    if (!window.confirm(`سابقه «${item.original_filename}» و تمام نتایج آن حذف شود؟`)) return;
+    setBusy(`delete-${item.id}`);
+    try {
+      await api<void>(`api/v1/financial-statements/imports/${item.id}`, { method: "DELETE" });
+      if (selectedImport?.id === item.id) { setSelectedImport(null); setRows([]); setRun(null); setValues([]); setValidations([]); }
+      setImports((current) => current.filter((entry) => entry.id !== item.id));
+      setMessage("سابقه پردازش و فایل مربوط به آن حذف شد.");
+    } catch (error) { showError(error); } finally { setBusy(""); }
+  }
   async function mapRow(row: TrialRow, target: string) {
     if (!selectedImport) return;
     const ignored = target === "__ignore";
@@ -145,7 +155,7 @@ export default function FinancialStatementsPage() {
           <div className="flex flex-wrap gap-2"><a href={`/api/backend/api/v1/financial-statements/runs/${run.id}/export/excel`}><Button variant="outline"><Download /> خروجی Excel</Button></a><a href={`/api/backend/api/v1/financial-statements/runs/${run.id}/export/pdf`}><Button variant="outline"><Download /> خروجی PDF</Button></a></div>
         </CardContent></Card>}
       </div>
-      <aside><Card className="xl:sticky xl:top-5"><CardHeader><CardTitle>سوابق پردازش</CardTitle></CardHeader><CardContent className="space-y-3">{imports.length === 0 && <p className="text-sm text-slate-500">هنوز فایلی بارگذاری نشده است.</p>}{imports.map((item) => <button key={item.id} onClick={() => void openImport(item)} className={`w-full rounded-xl border p-3 text-right transition hover:border-blue-300 ${selectedImport?.id === item.id ? "border-blue-500 bg-blue-50" : "bg-white"}`}><b className="block truncate text-sm">{item.original_filename}</b><span className="mt-1 block text-xs text-slate-500">{statusLabel[item.status] ?? item.status} · {number(item.mapping_coverage)}٪ نگاشت</span></button>)}</CardContent></Card></aside>
+      <aside><Card className="xl:sticky xl:top-5"><CardHeader><CardTitle>سوابق پردازش</CardTitle></CardHeader><CardContent className="space-y-3">{imports.length === 0 && <p className="text-sm text-slate-500">هنوز فایلی بارگذاری نشده است.</p>}{imports.map((item) => <div key={item.id} className={`flex items-center gap-2 rounded-xl border p-2 transition hover:border-blue-300 ${selectedImport?.id === item.id ? "border-blue-500 bg-blue-50" : "bg-white"}`}><button onClick={() => void openImport(item)} className="min-w-0 flex-1 p-1 text-right"><b className="block truncate text-sm">{item.original_filename}</b><span className="mt-1 block text-xs text-slate-500">{statusLabel[item.status] ?? item.status} · {number(item.mapping_coverage)}٪ نگاشت</span></button><Button aria-label="حذف سابقه پردازش" title="حذف سابقه" size="icon" variant="outline" className="shrink-0 text-rose-600 hover:bg-rose-50 hover:text-rose-700" disabled={busy === `delete-${item.id}`} onClick={() => void deleteImport(item)}>{busy === `delete-${item.id}` ? <Loader2 className="animate-spin" /> : <Trash2 />}</Button></div>)}</CardContent></Card></aside>
     </div>
   </div>;
 }
