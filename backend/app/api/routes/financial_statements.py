@@ -133,7 +133,7 @@ def get_import(import_id: str, user: Annotated[User, Depends(require_permissions
 @router.post("/imports/{import_id}/parse")
 def parse_import(import_id: str, request: Request, user: Annotated[User, Depends(require_permissions("financial_statements:upload"))], session: Annotated[Session, Depends(get_session)]):
     item = _import(session, user, import_id)
-    if item.status not in {"uploaded", "failed", "mapping_required"}: raise HTTPException(409, "این فایل در وضعیت قابل پردازش نیست")
+    if item.status == "parsing": raise HTTPException(409, "پردازش این فایل هم‌اکنون در حال انجام است")
     item.status = "parsing"; session.commit()
     try:
         data = request.app.state.storage.get(item.storage_key)
