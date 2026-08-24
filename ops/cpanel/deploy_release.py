@@ -54,6 +54,15 @@ def main() -> None:
         previous_web.rename(active_web)
         raise
 
+    htaccess = HOME / "public_html" / ".htaccess"
+    if htaccess.exists():
+        content = htaccess.read_text(encoding="utf-8")
+        content = content.replace(
+            f'PassengerNodejs "{HOME}/nodevenv/chakah-web/22/bin/node"',
+            'PassengerNodejs "/opt/alt/alt-nodejs22/root/usr/bin/node"',
+        )
+        htaccess.write_text(content, encoding="utf-8")
+
     backend_release = work / "backend-release"
     shutil.copytree(backend_release / "app", HOME / "backend" / "app", dirs_exist_ok=True)
     shutil.copytree(backend_release / "alembic", HOME / "backend" / "alembic", dirs_exist_ok=True)
