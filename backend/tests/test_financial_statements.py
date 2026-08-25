@@ -11,6 +11,7 @@ from app.services.financial_statements import (
     AccountMappingService, ExcelTrialBalanceParser, LegacyExcelTrialBalanceParser,
     FinancialStatementCalculationService, convert_money, extract_account,
     normalize_persian_financial, normalized_account_name, parse_amount,
+    pdf_export, workbook_export,
 )
 from app.schemas.financial_statements import FiscalYearCreate, OrganizationCreate
 
@@ -108,3 +109,14 @@ def test_complete_workspace_inputs_and_money_units():
     amount = Decimal("1000000")
     assert convert_money(amount, "rial", "rial") == amount
     assert convert_money(amount, "toman", "rial") == Decimal("10000000")
+
+
+def test_exports_are_valid_files():
+    field = FinancialStatementField(id="BS.CASH", statement="BS", title="موجودی نقد", field_type="mapped")
+    value = FinancialStatementValue(field_id=field.id, final_value=Decimal("123456"), status="calculated")
+    excel = workbook_export([(field, value)], "شرکت آزمون", "۱۴۰۵")
+    pdf = pdf_export([(field, value)], "شرکت آزمون", "۱۴۰۵")
+    assert excel.startswith(b"PK")
+    assert pdf.startswith(b"%PDF")
+    assert len(excel) > 1_000
+    assert len(pdf) > 10_000

@@ -122,6 +122,34 @@ export default function FinancialStatementsPage() {
     if (!run) return; const raw = window.prompt(`مبلغ تعدیل «${value.title}» را وارد کنید:`); if (!raw) return; const reason = window.prompt("دلیل تعدیل را بنویسید:"); if (!reason) return;
     try { const result = await api<{ run_id: string }>(`api/v1/financial-statements/runs/${run.id}/adjustments`, { method: "POST", body: JSON.stringify({ field_id: value.field_id, amount: raw.replaceAll(",", ""), reason }) }); if (result.run_id !== run.id) setRun({ ...run, id: result.run_id, version: run.version + 1, finalized_at: undefined }); setValues(await api<Value[]>(`api/v1/financial-statements/runs/${result.run_id}/values`)); setMessage("تعدیل با دلیل و سابقه ثبت شد."); } catch (error) { showError(error); }
   }
+  async function downloadExport(format: "excel" | "pdf") {
+    if (!run) return;
+    setBusy(`export-${format}`);
+    try {
+      const response = await fetch(`/api/backend/api/v1/financial-statements/runs/${run.id}/export/${format}`, {
+        credentials: "same-origin",
+        cache: "no-store",
+      });
+      if (!response.ok) {
+        let detail = "دریافت خروجی با خطا روبه‌رو شد.";
+        try { detail = (await response.json()).detail ?? detail; } catch { /* binary or empty error */ }
+        throw new Error(detail);
+      }
+      const blob = await response.blob();
+      if (!blob.size) throw new Error("فایل خروجی خالی است.");
+      const disposition = response.headers.get("content-disposition") ?? "";
+      const match = disposition.match(/filename\*?=(?:UTF-8''|["']?)([^"';]+)/i);
+      const extension = format === "excel" ? "xlsx" : "pdf";
+      const filename = match ? decodeURIComponent(match[1]) : `financial-statements.${extension}`;
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement("a");
+      link.href = url; link.download = filename; document.body.appendChild(link); link.click(); link.remove();
+      URL.revokeObjectURL(url);
+      setMessage(`خروجی ${format === "excel" ? "Excel" : "PDF"} آماده و دانلود شد.`);
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : "دریافت خروجی با خطا روبه‌رو شد.");
+    } finally { setBusy(""); }
+  }
   const filteredRows = useMemo(() => rows.filter((row) => (!status || row.status === status) && (!search || `${row.general_code} ${row.general_name} ${row.subsidiary_code} ${row.subsidiary_name} ${row.detail_code} ${row.detail_name}`.includes(search))), [rows, search, status]);
   const visibleValues = values.filter((item) => item.statement === activeStatement);
 
@@ -152,7 +180,7 @@ export default function FinancialStatementsPage() {
           <div className="flex flex-wrap gap-2">{Object.entries(statementLabel).map(([key, label]) => <Button key={key} size="sm" variant={activeStatement === key ? "default" : "outline"} onClick={() => setActiveStatement(key)}>{label}</Button>)}</div>
           <div className="overflow-hidden rounded-xl border">{visibleValues.map((value) => <details key={value.field_id} className="border-b last:border-0"><summary className="flex cursor-pointer items-center justify-between gap-4 p-4"><span>{value.title}{value.status === "manual_input_required" && <small className="mr-2 text-amber-700">نیازمند ورود دستی</small>}</span><b dir="ltr">{number(value.final_value)} {moneyLabel[run.money_unit]}</b></summary><div className="bg-slate-50 p-4 text-xs"><Button size="sm" variant="outline" onClick={() => void adjust(value)}>ثبت تعدیل با دلیل</Button><p className="my-3 text-slate-500">مبلغ محاسباتی: {number(value.calculated_value)} | تعدیلات: {number(value.adjustment_value)}</p>{value.sources.length ? value.sources.map((source) => <div key={source.row_id} className="flex justify-between border-t py-2"><span>{source.code} — {source.name}</span><b>{number(source.amount)}</b></div>) : <p>ردیف منبعی برای این سرفصل وجود ندارد.</p>}</div></details>)}</div>
           <div className="space-y-2">{validations.map((check) => <div key={check.code} className={`flex items-center gap-2 rounded-xl p-3 text-sm ${check.status === "passed" ? "bg-emerald-50 text-emerald-800" : "bg-rose-50 text-rose-800"}`}>{check.status === "passed" ? <CheckCircle2 /> : <AlertTriangle />}<span>{check.message} اختلاف: {number(check.difference)}</span></div>)}</div>
-          <div className="flex flex-wrap gap-2"><a href={`/api/backend/api/v1/financial-statements/runs/${run.id}/export/excel`}><Button variant="outline"><Download /> خروجی Excel</Button></a><a href={`/api/backend/api/v1/financial-statements/runs/${run.id}/export/pdf`}><Button variant="outline"><Download /> خروجی PDF</Button></a></div>
+          <div className="flex flex-wrap gap-2"><Button variant="outline" disabled={!!busy} onClick={() => void downloadExport("excel")}>{busy === "export-excel" ? <Loader2 className="animate-spin" /> : <Download />} خروجی Excel</Button><Button variant="outline" disabled={!!busy} onClick={() => void downloadExport("pdf")}>{busy === "export-pdf" ? <Loader2 className="animate-spin" /> : <Download />} خروجی PDF</Button></div>
         </CardContent></Card>}
       </div>
       <aside><Card className="xl:sticky xl:top-5"><CardHeader><CardTitle>سوابق پردازش</CardTitle></CardHeader><CardContent className="space-y-3">{imports.length === 0 && <p className="text-sm text-slate-500">هنوز فایلی بارگذاری نشده است.</p>}{imports.map((item) => <div key={item.id} className={`flex items-center gap-2 rounded-xl border p-2 transition hover:border-blue-300 ${selectedImport?.id === item.id ? "border-blue-500 bg-blue-50" : "bg-white"}`}><button onClick={() => void openImport(item)} className="min-w-0 flex-1 p-1 text-right"><b className="block truncate text-sm">{item.original_filename}</b><span className="mt-1 block text-xs text-slate-500">{statusLabel[item.status] ?? item.status} · {number(item.mapping_coverage)}٪ نگاشت</span></button><Button aria-label="حذف سابقه پردازش" title="حذف سابقه" size="icon" variant="outline" className="shrink-0 text-rose-600 hover:bg-rose-50 hover:text-rose-700" disabled={busy === `delete-${item.id}`} onClick={() => void deleteImport(item)}>{busy === `delete-${item.id}` ? <Loader2 className="animate-spin" /> : <Trash2 />}</Button></div>)}</CardContent></Card></aside>

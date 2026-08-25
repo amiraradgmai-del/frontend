@@ -366,6 +366,7 @@ class FinancialStatementCalculationService:
             self.session.add(FinancialStatementValue(run_id=run.id, field_id=field.id, status=status))
         self.session.flush()
         self._derived(run.id, fields)
+        self._automatic_summaries(run.id, import_)
         total_debit = sum((row.closing_debit for row in import_.rows), Decimal(0)); total_credit = sum((row.closing_credit for row in import_.rows), Decimal(0))
         difference = total_debit - total_credit
         status = "passed" if abs(difference) <= tolerance else "failed"
@@ -395,6 +396,39 @@ class FinancialStatementCalculationService:
                 calculated = sum((amount(item) for item in rule.get("add", [])), Decimal(0)) - sum((amount(item) for item in rule.get("subtract", [])), Decimal(0))
             else: continue
             target.calculated_value = calculated; target.final_value = calculated
+
+    def _automatic_summaries(self, run_id: str, import_: FinancialStatementImport):
+        """Populate the three summary statements that can be derived reliably from a trial balance."""
+        values = {item.field_id: item for item in self.session.scalars(
+            select(FinancialStatementValue).where(FinancialStatementValue.run_id == run_id)
+        )}
+
+        def set_value(field_id: str, amount: Decimal):
+            value = values.get(field_id)
+            if value is None:
+                return
+            value.calculated_value = amount
+            value.final_value = amount + value.adjustment_value
+            value.status = "calculated"
+
+        net_profit = values.get("PL.NET_PROFIT")
+        set_value("CI.MANUAL", net_profit.final_value if net_profit else Decimal(0))
+
+        equity_opening = Decimal(0)
+        equity_closing = Decimal(0)
+        cash_opening = Decimal(0)
+        cash_closing = Decimal(0)
+        for row in import_.rows:
+            code = (row.general_code or row.subsidiary_code or row.detail_code or "").strip()
+            if code.startswith("3"):
+                equity_opening += row.opening_credit - row.opening_debit
+                equity_closing += row.closing_credit - row.closing_debit
+            if code.startswith("1110"):
+                cash_opening += row.opening_debit - row.opening_credit
+                cash_closing += row.closing_debit - row.closing_credit
+
+        set_value("EQ.MANUAL", equity_closing - equity_opening)
+        set_value("CF.MANUAL", cash_closing - cash_opening)
 
 
 def convert_money(amount: Decimal, source_unit: str, target_unit: str) -> Decimal:
