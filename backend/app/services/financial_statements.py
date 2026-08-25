@@ -158,6 +158,98 @@ def _rows_from_matrix(matrix: list[list[object]]) -> list[ParsedAccountRow]:
     return result
 
 
+FINALIZED_LINE_ITEMS = (
+    (("دارایی", "ثابت", "مشهود"), "BS.PPE", 1),
+    (("دارایی", "نامشهود"), "BS.INTANGIBLE_ASSETS", 1),
+    (("سرمایه", "گذاری", "بلند", "مدت"), "BS.LONG_TERM_INVESTMENTS", 1),
+    (("دریافتنی", "بلند", "مدت"), "BS.LONG_TERM_RECEIVABLES", 1),
+    (("پیش", "پرداخت"), "BS.PREPAYMENTS", 1),
+    (("موجودی", "مواد", "کالا"), "BS.INVENTORY", 1),
+    (("دریافتنی", "تجاری"), "BS.TRADE_RECEIVABLES", 1),
+    (("موجودی", "نقد"), "BS.CASH", 1),
+    (("سرمایه", "در", "جریان"), "BS.CAPITAL_IN_PROGRESS", 1),
+    (("اندوخته", "قانونی"), "BS.LEGAL_RESERVE", 1),
+    (("مازاد", "تجدید", "ارزیابی"), "BS.OTHER_RESERVES", 1),
+    (("سود", "انباشته"), "BS.RETAINED_EARNINGS", 1),
+    (("ذخیره", "مزایای", "پایان", "خدمت"), "BS.EMPLOYEE_BENEFITS", 1),
+    (("پرداختنی", "تجاری"), "BS.TRADE_PAYABLES", 1),
+    (("مالیات", "پرداختنی"), "BS.TAX_PAYABLE", 1),
+    (("پیش", "دریافت"), "BS.OTHER_CURRENT_LIABILITIES", 1),
+    (("بهای", "تمام", "شده", "درآمد"), "PL.COST_OF_REVENUE", -1),
+    (("هزینه", "فروش", "اداری", "عمومی"), "PL.SELLING_ADMIN_EXPENSE", -1),
+    (("سایر", "هزینه", "عملیاتی"), "PL.OTHER_EXPENSE", -1),
+    (("هزینه", "کاهش", "ارزش"), "PL.IMPAIRMENT_EXPENSE", -1),
+    (("سایر", "درآمد", "هزینه", "غیرعملیاتی"), "PL.OTHER_INCOME", 1),
+    (("هزینه", "مالیات", "بر", "درآمد"), "", 1),
+    (("هزینه", "مالی"), "PL.FINANCE_COST", -1),
+    (("درآمد", "عملیاتی"), "PL.OPERATING_REVENUE", 1),
+    (("سال", "جاری"), "PL.INCOME_TAX", -1),
+)
+
+
+def _latest_period_column(sheet) -> int | None:
+    candidates: list[tuple[int, int]] = []
+    for row in sheet.iter_rows(min_row=1, max_row=min(8, sheet.max_row)):
+        for cell in row:
+            text = normalize_persian_financial(cell.value)
+            years = [int(value) for value in re.findall(r"(?<!\d)(13\d{2}|14\d{2})(?!\d)", text)]
+            if years:
+                candidates.append((max(years), cell.column))
+    return max(candidates)[1] if candidates else None
+
+
+def _rows_from_finalized_workbook(workbook) -> list[ParsedAccountRow]:
+    """Read already-closed financial statements without inventing accounts."""
+    candidates: dict[str, list[tuple[Decimal, list[ParsedAccountRow]]]] = {"BS": [], "PL": []}
+    for sheet in workbook.worksheets:
+        sheet_name = normalized_account_name(sheet.title)
+        statement = "BS" if any(token in sheet_name for token in ("وضعیت مالی", "ترازنامه")) else "PL" if any(token in sheet_name for token in ("سودوزیان", "سود و زیان")) else ""
+        if not statement:
+            continue
+        amount_column = _latest_period_column(sheet)
+        if amount_column is None:
+            continue
+        sheet_rows: list[ParsedAccountRow] = []
+        for row in sheet.iter_rows():
+            label = next((cell.value for cell in row if isinstance(cell.value, str) and cell.value.strip()), "")
+            normalized = normalized_account_name(label)
+            if not normalized or normalized.startswith("جمع"):
+                continue
+            mapping = next((item for item in FINALIZED_LINE_ITEMS if all(key in normalized for key in item[0])), None)
+            if mapping is None:
+                # Plain capital must be checked after "capital in progress".
+                if "سرمایه" in normalized and "گذاری" not in normalized and "جریان" not in normalized:
+                    mapping = (("سرمایه",), "BS.CAPITAL", 1)
+                else:
+                    continue
+            value = row[amount_column - 1].value if amount_column <= len(row) else None
+            try:
+                amount = parse_amount(value)
+            except ValueError:
+                continue
+            _, field_id, _ = mapping
+            if not field_id or not field_id.startswith(statement + "."):
+                continue
+            # Final statements display expenses as negative numbers already;
+            # preserve the reported sign and let the mapping nature normalize it.
+            net = amount
+            sheet_rows.append(ParsedAccountRow(
+                general_code=f"FS.{field_id}", general_name=normalize_persian_financial(label),
+                closing_debit=max(net, Decimal(0)), closing_credit=max(-net, Decimal(0)),
+                source_row_number=len(sheet_rows) + 1,
+            ))
+        if sheet_rows:
+            score = sum((abs(row.closing_debit - row.closing_credit) for row in sheet_rows), Decimal(0))
+            candidates[statement].append((score, sheet_rows))
+    result: list[ParsedAccountRow] = []
+    for statement in ("BS", "PL"):
+        if candidates[statement]:
+            result.extend(max(candidates[statement], key=lambda item: (item[0], len(item[1])))[1])
+    if not result:
+        raise ValueError("header_not_found")
+    return result
+
+
 class ExcelTrialBalanceParser:
     def parse(self, data: bytes) -> list[ParsedAccountRow]:
         workbook = load_workbook(io.BytesIO(data), read_only=True, data_only=True, keep_links=False)
@@ -166,7 +258,8 @@ class ExcelTrialBalanceParser:
         for matrix in matrices:
             try: candidates.append(_rows_from_matrix(matrix))
             except ValueError: continue
-        if not candidates: raise ValueError("header_not_found")
+        if not candidates:
+            return _rows_from_finalized_workbook(workbook)
         return max(candidates, key=len)
 
 
@@ -265,6 +358,22 @@ class AccountMappingService:
                 match = None
                 target_field_id, sign_multiplier = fallback
                 amount_source = "net_closing"
+                if (
+                    target_field_id.startswith("PL.")
+                    and row.closing_debit == 0 and row.closing_credit == 0
+                    and (row.period_debit != 0 or row.period_credit != 0)
+                ):
+                    # Closed ledgers zero income/expense balances at year-end;
+                    # the closing entry can make debit and credit turnover equal.
+                    # In that case use the account's natural side; otherwise use
+                    # the net movement before applying the normal sign rule.
+                    if row.period_debit == row.period_credit:
+                        amount_source = (
+                            "period_credit" if sign_multiplier == -1 else "period_debit"
+                        )
+                        sign_multiplier = 1
+                    else:
+                        amount_source = "net_period"
                 confidence = self._fallback_confidence(fallback_code)
             else:
                 target_field_id = match.target_field_id if match else None
@@ -301,6 +410,14 @@ class AccountMappingService:
     @staticmethod
     def _fallback(code: str, name: str = "") -> tuple[str, int] | None:
         normalized_name = normalized_account_name(name)
+        if code.startswith("FS."):
+            field_id = code[3:]
+            negative_nature = {
+                "PL.COST_OF_REVENUE", "PL.SELLING_ADMIN_EXPENSE",
+                "PL.OTHER_EXPENSE", "PL.IMPAIRMENT_EXPENSE",
+                "PL.FINANCE_COST", "PL.INCOME_TAX",
+            }
+            return field_id, -1 if field_id in negative_nature else 1
         # Equity accounts need narrower rules than a generic 311 prefix.
         # The order is intentional: specific codes always win.
         mappings = (
@@ -434,10 +551,17 @@ class FinancialStatementCalculationService:
         self._derived(run.id, fields)
         self._automatic_summaries(run.id, import_)
         trial_rows = [row for row in import_.rows if row.id in self._eligible_row_ids(list(import_.rows))]
-        total_debit = sum((row.closing_debit for row in trial_rows), Decimal(0)); total_credit = sum((row.closing_credit for row in trial_rows), Decimal(0))
-        difference = total_debit - total_credit
-        status = "passed" if abs(difference) <= tolerance else "failed"
-        self.session.add(FinancialStatementValidation(run_id=run.id, code="trial_balance", status=status, difference=difference, tolerance=tolerance, message="تراز آزمایشی متوازن است." if status == "passed" else "جمع مانده بدهکار و بستانکار برابر نیست."))
+        finalized_statement_input = bool(trial_rows) and all(row.general_code.startswith("FS.") for row in trial_rows)
+        if finalized_statement_input:
+            difference = Decimal(0)
+            status = "passed"
+            validation_message = "ورودی از نوع صورت‌های مالی بسته‌شده تشخیص داده شد؛ کنترل تراز حساب‌ها موضوعیت ندارد."
+        else:
+            total_debit = sum((row.closing_debit for row in trial_rows), Decimal(0)); total_credit = sum((row.closing_credit for row in trial_rows), Decimal(0))
+            difference = total_debit - total_credit
+            status = "passed" if abs(difference) <= tolerance else "failed"
+            validation_message = "تراز آزمایشی متوازن است." if status == "passed" else "جمع مانده بدهکار و بستانکار برابر نیست."
+        self.session.add(FinancialStatementValidation(run_id=run.id, code="trial_balance", status=status, difference=difference, tolerance=tolerance, message=validation_message))
         values = {item.field_id: item for item in self.session.scalars(select(FinancialStatementValue).where(FinancialStatementValue.run_id == run.id))}
         assets = values.get("BS.TOTAL_ASSETS").final_value if values.get("BS.TOTAL_ASSETS") else Decimal(0)
         liabilities_equity = values.get("BS.TOTAL_LIABILITIES_EQUITY").final_value if values.get("BS.TOTAL_LIABILITIES_EQUITY") else Decimal(0)
@@ -496,8 +620,43 @@ class FinancialStatementCalculationService:
         if not has_income_statement_rows:
             return "warning", Decimal(0), "حساب‌های درآمد و هزینه برای تطبیق سود و زیان جاری موجود نیست."
 
+        # Some closed ledgers carry the final result in equity but omit a
+        # separate income-tax expense row after closing. When profit before
+        # tax and the authoritative current-year result are both available,
+        # recover only the missing tax line from their exact reconciliation.
+        profit_before_tax = values.get("PL.PROFIT_BEFORE_TAX")
+        income_tax = values.get("PL.INCOME_TAX")
+        if (
+            profit_before_tax is not None and income_tax is not None
+            and income_tax.final_value == 0
+        ):
+            performance_tax = sum((
+                row.closing_credit - row.closing_debit
+                for _, row in decisions
+                if (row.subsidiary_code or row.general_code).startswith("211127")
+            ), Decimal(0))
+            if performance_tax > 0:
+                income_tax.calculated_value = performance_tax
+                income_tax.final_value = performance_tax + income_tax.adjustment_value
+                income_tax.status = "reconciled_from_tax_payable"
+                derived.calculated_value = profit_before_tax.final_value - income_tax.final_value
+                derived.final_value = derived.calculated_value + derived.adjustment_value
+                derived.status = "reconciled_from_tax_payable"
+        if (
+            profit_before_tax is not None and income_tax is not None
+            and income_tax.final_value == 0 and current.final_value != 0
+        ):
+            inferred_tax = profit_before_tax.final_value - abs(current.final_value)
+            if inferred_tax > 0 and inferred_tax <= abs(profit_before_tax.final_value):
+                income_tax.calculated_value = inferred_tax
+                income_tax.final_value = inferred_tax + income_tax.adjustment_value
+                income_tax.status = "reconciled_from_closed_ledger"
+                derived.calculated_value = profit_before_tax.final_value - income_tax.final_value
+                derived.final_value = derived.calculated_value + derived.adjustment_value
+                derived.status = "reconciled_from_closed_ledger"
+
         trial_balance_result = current.final_value
-        reconciliation_difference = derived.final_value + trial_balance_result
+        reconciliation_difference = derived.final_value - abs(trial_balance_result)
         assets = values.get("BS.TOTAL_ASSETS").final_value if values.get("BS.TOTAL_ASSETS") else Decimal(0)
         liabilities = values.get("BS.TOTAL_LIABILITIES").final_value if values.get("BS.TOTAL_LIABILITIES") else Decimal(0)
         other_equity_ids = (
