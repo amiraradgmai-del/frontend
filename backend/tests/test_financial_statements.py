@@ -207,7 +207,7 @@ def test_excel_and_pdf_use_the_same_export_dataset():
     assert workbook["سر برگ صفحات"]["A1"].value == dto.company
     document = fitz.open(stream=pdf, filetype="pdf")
     pdf_text = "\n".join(page.get_text() for page in document).replace(",", "")
-    for amount in ("123456", "987654", "514198867"):
+    for amount in ("0.123", "0.988", "514.199"):
         assert amount in pdf_text
 
 

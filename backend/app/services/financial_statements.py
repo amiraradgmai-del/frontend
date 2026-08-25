@@ -894,22 +894,70 @@ def workbook_export(values, company: str, year: str, money_unit: str = "rial") -
 
 def pdf_export(values, company: str, year: str, money_unit: str = "rial") -> bytes:
     data = build_export_data(values, company, year, money_unit)
+    raw = {row.field_id: row.amount for rows in data.statements.values() for row in rows}
+    amount = lambda field_id: convert_money(raw.get(field_id, Decimal(0)), data.money_unit, "rial") / Decimal(1_000_000)
+    layouts = {
+        "BS": (
+            ("دارایی‌های ثابت مشهود", amount("BS.PPE")),
+            ("دارایی‌های نامشهود", amount("BS.INTANGIBLE_ASSETS")),
+            ("سرمایه‌گذاری‌های بلندمدت", amount("BS.LONG_TERM_INVESTMENTS")),
+            ("دریافتنی‌های بلندمدت", amount("BS.LONG_TERM_RECEIVABLES")),
+            ("سایر دارایی‌ها", amount("BS.OTHER_ASSETS")),
+            ("پیش‌پرداخت‌ها", amount("BS.PREPAYMENTS")),
+            ("موجودی مواد و کالا", amount("BS.INVENTORY")),
+            ("دریافتنی‌های تجاری و سایر دریافتنی‌ها", amount("BS.TRADE_RECEIVABLES") + amount("BS.OTHER_RECEIVABLES")),
+            ("سرمایه‌گذاری‌های کوتاه‌مدت", amount("BS.SHORT_TERM_INVESTMENTS")),
+            ("موجودی نقد", amount("BS.CASH")),
+            ("جمع دارایی‌ها", amount("BS.TOTAL_ASSETS")),
+            ("سرمایه", amount("BS.CAPITAL")),
+            ("افزایش سرمایه در جریان", amount("BS.CAPITAL_IN_PROGRESS")),
+            ("اندوخته قانونی", amount("BS.LEGAL_RESERVE")),
+            ("سایر اندوخته‌ها", amount("BS.OTHER_RESERVES")),
+            ("سود انباشته", amount("BS.RETAINED_EARNINGS") + amount("BS.CURRENT_YEAR_PROFIT_LOSS")),
+            ("پرداختنی‌های بلندمدت", amount("BS.LONG_TERM_PAYABLES")),
+            ("تسهیلات مالی بلندمدت", amount("BS.LONG_TERM_BORROWINGS")),
+            ("ذخیره مزایای پایان خدمت کارکنان", amount("BS.EMPLOYEE_BENEFITS")),
+            ("پرداختنی‌های تجاری و سایر پرداختنی‌ها", amount("BS.TRADE_PAYABLES") + amount("BS.OTHER_PAYABLES")),
+            ("مالیات پرداختنی", amount("BS.TAX_PAYABLE")),
+            ("سود سهام پرداختنی", amount("BS.DIVIDEND_PAYABLE")),
+            ("تسهیلات مالی کوتاه‌مدت", amount("BS.SHORT_TERM_BORROWINGS")),
+            ("ذخایر", amount("BS.PROVISIONS")),
+            ("پیش‌دریافت‌ها", amount("BS.OTHER_CURRENT_LIABILITIES")),
+            ("جمع حقوق مالکانه و بدهی‌ها", amount("BS.TOTAL_LIABILITIES_EQUITY")),
+        ),
+        "PL": (
+            ("درآمدهای عملیاتی", amount("PL.OPERATING_REVENUE")),
+            ("بهای تمام‌شده درآمدهای عملیاتی", -amount("PL.COST_OF_REVENUE")),
+            ("سود ناخالص", amount("PL.GROSS_PROFIT")),
+            ("هزینه‌های فروش، اداری و عمومی", -amount("PL.SELLING_ADMIN_EXPENSE")),
+            ("هزینه کاهش ارزش دریافتنی‌ها", -amount("PL.IMPAIRMENT_EXPENSE")),
+            ("سایر درآمدها", amount("PL.OTHER_INCOME")),
+            ("سایر هزینه‌ها", -amount("PL.OTHER_EXPENSE")),
+            ("سود عملیاتی", amount("PL.OPERATING_PROFIT")),
+            ("هزینه‌های مالی", -amount("PL.FINANCE_COST")),
+            ("سود قبل از مالیات", amount("PL.PROFIT_BEFORE_TAX")),
+            ("مالیات بر درآمد", -amount("PL.INCOME_TAX")),
+            ("سود خالص", amount("PL.NET_PROFIT")),
+        ),
+        "CI": (("سود جامع سال", amount("CI.MANUAL")),),
+        "EQ": (("تغییرات حقوق مالکانه", amount("EQ.MANUAL")),),
+        "CF": (("خالص افزایش (کاهش) در موجودی نقد", amount("CF.MANUAL")),),
+    }
     document = fitz.open()
     font_dir = Path(__file__).resolve().parent.parent / "assets"
     archive = fitz.Archive(str(font_dir))
     css = "@font-face{font-family:vazir;src:url(vazirmatn.ttf)}body{font-family:vazir;direction:rtl;color:#102a56}h1{text-align:center;font-size:20px}.meta{text-align:center;color:#58708f}table{border-collapse:collapse;width:100%;font-size:10px}td,th{border:1px solid #cad8e8;padding:7px;text-align:right}th{background:#246bce;color:white}.alt{background:#eaf4ff}.amount{text-align:left;direction:ltr}.page{text-align:center;font-size:9px;color:#718096}"
     page_number = 0
     for code, statement_title in STATEMENT_TITLES.items():
-        rows = data.statements[code]
+        rows = layouts[code]
         for start in range(0, max(len(rows), 1), 28):
             page_number += 1
             page = document.new_page(width=595, height=842)
             body_parts = []
-            for index, export_row in enumerate(rows[start:start + 28]):
+            for index, (title, row_amount) in enumerate(rows[start:start + 28]):
                 css_class = " class='alt'" if index % 2 else ""
-                status = "نیازمند تکمیل" if export_row.status == "manual_input_required" else ""
-                body_parts.append(f"<tr{css_class}><td>{export_row.title}</td><td class='amount'>{export_row.amount:,.0f}</td><td>{status}</td></tr>")
-            html = f"<h1>{statement_title}</h1><div class='meta'>{data.company} — سال مالی {data.year} — مبالغ به {UNIT_TITLES[data.money_unit]}</div><br><table><thead><tr><th>شرح</th><th>مبلغ</th><th>وضعیت</th></tr></thead><tbody>{''.join(body_parts)}</tbody></table><p class='page'>صفحه {page_number}</p>"
+                body_parts.append(f"<tr{css_class}><td>{title}</td><td class='amount'>{row_amount:,.3f}</td></tr>")
+            html = f"<h1>{statement_title}</h1><div class='meta'>{data.company} — سال مالی {data.year} — مبالغ به میلیون ریال</div><br><table><thead><tr><th>شرح</th><th>مبلغ</th></tr></thead><tbody>{''.join(body_parts)}</tbody></table><p class='page'>صفحه {page_number}</p>"
             page.insert_htmlbox(fitz.Rect(36, 38, 559, 804), html, css=css, archive=archive)
     output = io.BytesIO(); document.save(output); document.close(); return output.getvalue()
 
