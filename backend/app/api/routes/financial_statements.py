@@ -264,14 +264,16 @@ def finalize(run_id: str, user: Annotated[User, Depends(require_permissions("fin
 def export_excel(run_id: str, user: Annotated[User, Depends(require_permissions("financial_statements:export"))], session: Annotated[Session, Depends(get_session)]):
     run=_run(session,user,run_id); item=session.get(FinancialStatementImport,run.import_id); org=session.get(FinancialOrganization,item.organization_id); year=session.get(FinancialFiscalYear,item.fiscal_year_id)
     rows=session.execute(select(FinancialStatementField,FinancialStatementValue).join(FinancialStatementValue,FinancialStatementValue.field_id==FinancialStatementField.id).where(FinancialStatementValue.run_id==run.id).order_by(FinancialStatementField.sort_order)).all(); data=workbook_export(rows,org.name,year.title); _audit(session,user,"financial.export_excel","financial_statement_run",run.id); session.commit()
-    safe=re.sub(r"[^\w-]+","-",org.name); return Response(data,media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",headers={"Content-Disposition":f'attachment; filename="Financial-Statements-{safe}-{year.title}.xlsx"'})
+    filename=f"financial-statements-{run.id}.xlsx"
+    return Response(data,media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",headers={"Content-Disposition":f'attachment; filename="{filename}"',"Content-Length":str(len(data)),"Cache-Control":"private, no-store"})
 
 
 @router.get("/runs/{run_id}/export/pdf")
 def export_pdf(run_id: str, user: Annotated[User, Depends(require_permissions("financial_statements:export"))], session: Annotated[Session, Depends(get_session)]):
     run=_run(session,user,run_id); item=session.get(FinancialStatementImport,run.import_id); org=session.get(FinancialOrganization,item.organization_id); year=session.get(FinancialFiscalYear,item.fiscal_year_id)
     rows=session.execute(select(FinancialStatementField,FinancialStatementValue).join(FinancialStatementValue,FinancialStatementValue.field_id==FinancialStatementField.id).where(FinancialStatementValue.run_id==run.id).order_by(FinancialStatementField.sort_order)).all(); data=pdf_export(rows,org.name,year.title); _audit(session,user,"financial.export_pdf","financial_statement_run",run.id); session.commit()
-    safe=re.sub(r"[^\w-]+","-",org.name); return Response(data,media_type="application/pdf",headers={"Content-Disposition":f'attachment; filename="Financial-Statements-{safe}-{year.title}.pdf"'})
+    filename=f"financial-statements-{run.id}.pdf"
+    return Response(data,media_type="application/pdf",headers={"Content-Disposition":f'attachment; filename="{filename}"',"Content-Length":str(len(data)),"Cache-Control":"private, no-store"})
 
 
 def _mapping_counts(session: Session, import_id: str):
