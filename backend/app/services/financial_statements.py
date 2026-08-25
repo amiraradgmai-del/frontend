@@ -172,8 +172,11 @@ class ExcelTrialBalanceParser:
 
 class LegacyExcelTrialBalanceParser:
     def parse(self, data: bytes) -> list[ParsedAccountRow]:
-        if data.lstrip().startswith(b"<?xml"):
-            return self._parse_spreadsheet_xml(data)
+        # SpreadsheetML exports from several Iranian accounting packages use
+        # an .xls extension and may begin with an UTF-8 BOM.
+        xml_data = data[3:] if data.startswith(b"\xef\xbb\xbf") else data
+        if xml_data.lstrip().startswith(b"<?xml"):
+            return self._parse_spreadsheet_xml(xml_data)
         try:
             import xlrd
             workbook = xlrd.open_workbook(file_contents=data, on_demand=True)
@@ -267,12 +270,17 @@ class AccountMappingService:
                 target_field_id = match.target_field_id if match else None
                 amount_source = match.amount_source if match else "net_closing"
                 sign_multiplier = match.sign_multiplier if match else 1
-            status = "mapped" if confidence >= 90 else "needs_review" if confidence >= 70 else "unmapped"
+            is_ignored = target_field_id == "__IGNORE__"
+            if is_ignored:
+                target_field_id = None
+            status = "ignored" if is_ignored else "mapped" if confidence >= 90 else "needs_review" if confidence >= 70 else "unmapped"
             decision = self.session.scalar(select(AccountMappingDecision).where(AccountMappingDecision.import_row_id == row.id)) or AccountMappingDecision(import_row_id=row.id)
             decision.rule_id = match.id if match else None; decision.target_field_id = target_field_id
             decision.amount_source = amount_source; decision.sign_multiplier = sign_multiplier
             decision.confidence = confidence; decision.status = status
-            self.session.add(decision); counts[status] += 1
+            self.session.add(decision)
+            counts.setdefault(status, 0)
+            counts[status] += 1
         import_.status = "ready_to_calculate" if counts["unmapped"] == 0 and counts["needs_review"] == 0 else "mapping_required"
         return counts
 
@@ -296,27 +304,51 @@ class AccountMappingService:
         # Equity accounts need narrower rules than a generic 311 prefix.
         # The order is intentional: specific codes always win.
         mappings = (
+            ("9", "__IGNORE__", 1),
             ("1110", "BS.CASH", 1),
             ("1111", "BS.SHORT_TERM_INVESTMENTS", 1),
             ("1112", "BS.TRADE_RECEIVABLES", 1),
-            ("1113", "BS.TRADE_RECEIVABLES", 1),
+            ("1113", "BS.OTHER_RECEIVABLES", 1),
             ("1114", "BS.INVENTORY", 1),
             ("1115", "BS.INVENTORY", 1),
             ("1116", "BS.PPE", 1),
             ("1118", "BS.PREPAYMENTS", 1),
-            ("12", "BS.PPE", 1),
-            ("21", "BS.CURRENT_LIABILITIES", -1),
-            ("22", "BS.NON_CURRENT_LIABILITIES", -1),
-            ("311301", "BS.CURRENT_YEAR_PROFIT_LOSS", -1),
+            ("1210", "BS.PPE", 1),
+            ("1211", "BS.INTANGIBLE_ASSETS", 1),
+            ("1212", "BS.LONG_TERM_INVESTMENTS", 1),
+            ("1213", "BS.LONG_TERM_RECEIVABLES", 1),
+            ("12", "BS.OTHER_ASSETS", 1),
+            ("2110", "BS.TRADE_PAYABLES", -1),
+            ("2111", "BS.OTHER_PAYABLES", -1),
+            ("2112", "BS.TAX_PAYABLE", -1),
+            ("2113", "BS.DIVIDEND_PAYABLE", -1),
+            ("2114", "BS.SHORT_TERM_BORROWINGS", -1),
+            ("2115", "BS.PROVISIONS", -1),
+            ("21", "BS.OTHER_CURRENT_LIABILITIES", -1),
+            ("2210", "BS.LONG_TERM_PAYABLES", -1),
+            ("2211", "BS.LONG_TERM_BORROWINGS", -1),
+            ("2212", "BS.EMPLOYEE_BENEFITS", -1),
+            ("22", "BS.OTHER_NON_CURRENT_LIABILITIES", -1),
+            ("311401", "BS.CURRENT_YEAR_PROFIT_LOSS", -1),
+            ("311301", "BS.RETAINED_EARNINGS", -1),
             ("311201", "BS.RETAINED_EARNINGS", -1),
             ("311101", "BS.LEGAL_RESERVE", -1),
             ("311002", "BS.CAPITAL_IN_PROGRESS", -1),
             ("311001", "BS.CAPITAL", -1),
+            ("31", "BS.OTHER_RESERVES", -1),
+            ("4110", "PL.OPERATING_REVENUE", -1),
+            ("4111", "PL.OPERATING_REVENUE", -1),
             ("4112", "PL.OTHER_INCOME", -1),
-            ("4", "PL.OPERATING_REVENUE", -1),
-            ("5", "PL.COST_OF_REVENUE", 1),
+            ("41", "PL.OTHER_INCOME", -1),
+            ("5110", "PL.COST_OF_REVENUE", 1),
+            ("51", "PL.COST_OF_REVENUE", 1),
+            ("6110", "PL.SELLING_ADMIN_EXPENSE", 1),
+            ("6111", "PL.SELLING_ADMIN_EXPENSE", 1),
+            ("6112", "PL.SELLING_ADMIN_EXPENSE", 1),
             ("6211", "PL.FINANCE_COST", 1),
-            ("6", "PL.SELLING_ADMIN_EXPENSE", 1),
+            ("6212", "PL.OTHER_EXPENSE", 1),
+            ("62", "PL.OTHER_EXPENSE", 1),
+            ("71", "PL.INCOME_TAX", 1),
         )
         for prefix, target, sign in mappings:
             if code.startswith(prefix):
@@ -334,7 +366,7 @@ class AccountMappingService:
 
     @staticmethod
     def _fallback_confidence(code: str) -> int:
-        if code in {"311001", "311002", "311101", "311201", "311301"}:
+        if code in {"311001", "311002", "311101", "311201", "311301", "311401"}:
             return 100
         if code:
             return 90

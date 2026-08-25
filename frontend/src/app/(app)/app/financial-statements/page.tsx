@@ -155,8 +155,8 @@ export default function FinancialStatementsPage() {
 
   return <div className="space-y-6" dir="rtl">
     <header className="overflow-hidden rounded-[2rem] bg-gradient-to-l from-slate-950 via-blue-950 to-blue-700 p-7 text-white shadow-xl">
-      <FileSpreadsheet className="size-11 text-cyan-200" /><p className="mt-4 text-sm font-bold text-cyan-200">از تراز آزمایشی تا گزارش قابل ردیابی</p>
-      <h1 className="mt-1 text-3xl font-black">تهیه خودکار صورت‌های مالی</h1><p className="mt-3 max-w-3xl text-sm leading-8 text-blue-50">فایل Excel یا PDF تراز آزمایشی را بارگذاری کنید؛ سامانه حساب‌ها را بدون ساختن داده نگاشت می‌کند، موارد نامشخص را برای تصمیم شما نگه می‌دارد و خروجی Excel و PDF می‌سازد.</p>
+      <FileSpreadsheet className="size-11 text-cyan-200" /><p className="mt-4 text-sm font-bold text-cyan-200">از تراز آزمایشی یا بسته‌شده تا گزارش قابل ردیابی</p>
+      <h1 className="mt-1 text-3xl font-black">تهیه خودکار صورت‌های مالی</h1><p className="mt-3 max-w-3xl text-sm leading-8 text-blue-50">فایل Excel، XLS یا PDF تراز آزمایشی یا بسته‌شده را بارگذاری کنید؛ سامانه قالب و سطح حساب‌ها را تشخیص می‌دهد، از شمارش دوباره کل/معین/تفصیلی جلوگیری می‌کند، حساب‌ها را بدون ساختن داده نگاشت می‌کند و خروجی همسان Excel و PDF می‌سازد.</p>
     </header>
     {message && <div className="rounded-2xl border border-blue-200 bg-blue-50 px-5 py-3 text-sm text-blue-900">{message}<button className="mr-4 text-xs underline" onClick={() => setMessage("")}>بستن</button></div>}
     <div className="grid gap-6 xl:grid-cols-[1fr_320px]">

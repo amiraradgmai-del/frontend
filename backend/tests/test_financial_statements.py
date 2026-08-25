@@ -148,7 +148,41 @@ def test_equity_mapping_is_specific_and_not_generic_311():
     assert AccountMappingService._fallback("311002", "سرمایه در جریان") == ("BS.CAPITAL_IN_PROGRESS", -1)
     assert AccountMappingService._fallback("311101", "اندوخته قانونی") == ("BS.LEGAL_RESERVE", -1)
     assert AccountMappingService._fallback("311201", "سود انباشته") == ("BS.RETAINED_EARNINGS", -1)
-    assert AccountMappingService._fallback("311301", "سود جاری") == ("BS.CURRENT_YEAR_PROFIT_LOSS", -1)
+    assert AccountMappingService._fallback("311301", "سود انباشته") == ("BS.RETAINED_EARNINGS", -1)
+    assert AccountMappingService._fallback("311401", "سود جاری") == ("BS.CURRENT_YEAR_PROFIT_LOSS", -1)
+
+
+def test_fastreport_spreadsheet_xml_accepts_utf8_bom():
+    data = """<?xml version="1.0"?>
+    <Workbook xmlns="urn:schemas-microsoft-com:office:spreadsheet"
+      xmlns:ss="urn:schemas-microsoft-com:office:spreadsheet">
+      <Worksheet ss:Name="Sheet"><Table>
+        <Row><Cell><Data ss:Type="String">کل</Data></Cell><Cell><Data ss:Type="String">معین</Data></Cell><Cell><Data ss:Type="String">تفصیلی</Data></Cell><Cell><Data ss:Type="String">بد طی دوره</Data></Cell><Cell><Data ss:Type="String">بس طی دوره</Data></Cell><Cell><Data ss:Type="String">مانده بد</Data></Cell><Cell><Data ss:Type="String">مانده بس</Data></Cell></Row>
+        <Row><Cell><Data ss:Type="String">1110 - موجودی نقد و بانک</Data></Cell><Cell><Data ss:Type="String">111005 - بانک</Data></Cell><Cell><Data ss:Type="String">بانک ملت</Data></Cell><Cell><Data ss:Type="Number">1000</Data></Cell><Cell><Data ss:Type="Number">0</Data></Cell><Cell><Data ss:Type="Number">1000</Data></Cell><Cell><Data ss:Type="Number">0</Data></Cell></Row>
+      </Table></Worksheet>
+    </Workbook>""".encode("utf-8")
+    rows = LegacyExcelTrialBalanceParser().parse(b"\xef\xbb\xbf" + data)
+    assert len(rows) == 1
+    assert rows[0].subsidiary_code == "111005"
+    assert rows[0].closing_debit == Decimal("1000")
+
+
+def test_finalized_ledger_chart_mapping_is_precise():
+    expected = {
+        "111306": ("BS.OTHER_RECEIVABLES", 1),
+        "211001": ("BS.TRADE_PAYABLES", -1),
+        "211127": ("BS.OTHER_PAYABLES", -1),
+        "221201": ("BS.EMPLOYEE_BENEFITS", -1),
+        "311301": ("BS.RETAINED_EARNINGS", -1),
+        "311401": ("BS.CURRENT_YEAR_PROFIT_LOSS", -1),
+        "411001": ("PL.OPERATING_REVENUE", -1),
+        "511001": ("PL.COST_OF_REVENUE", 1),
+        "611001": ("PL.SELLING_ADMIN_EXPENSE", 1),
+        "621110": ("PL.FINANCE_COST", 1),
+        "911201": ("__IGNORE__", 1),
+    }
+    for code, mapping in expected.items():
+        assert AccountMappingService._fallback(code) == mapping
 
 
 def test_excel_and_pdf_use_the_same_export_dataset():
