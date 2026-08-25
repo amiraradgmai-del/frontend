@@ -200,9 +200,11 @@ def test_excel_and_pdf_use_the_same_export_dataset():
     excel = workbook_export(rows, dto.company, dto.year, dto.money_unit)
     pdf = pdf_export(rows, dto.company, dto.year, dto.money_unit)
     workbook = load_workbook(BytesIO(excel), data_only=False)
-    assert workbook["صورت وضعیت مالی"]["B5"].value == Decimal("123456")
-    assert workbook["صورت وضعیت مالی"]["B6"].value == Decimal("987654")
-    assert workbook["صورت سود و زیان"]["B5"].value == Decimal("514198867")
+    # The official template is denominated in million rials and keeps its
+    # original Persian sheet names and cell architecture.
+    assert Decimal(str(workbook["وضعيت مالي"]["F21"].value)) == Decimal("0.123456")
+    assert Decimal(str(workbook["جامع"]["F8"].value)) == Decimal("514.198867")
+    assert workbook["سر برگ صفحات"]["A1"].value == dto.company
     document = fitz.open(stream=pdf, filetype="pdf")
     pdf_text = "\n".join(page.get_text() for page in document).replace(",", "")
     for amount in ("123456", "987654", "514198867"):

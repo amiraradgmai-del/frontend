@@ -13,6 +13,7 @@ from typing import Protocol
 
 import fitz
 from openpyxl import Workbook, load_workbook
+from openpyxl.cell.cell import MergedCell
 from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
@@ -797,47 +798,97 @@ def build_export_data(
 
 def workbook_export(values, company: str, year: str, money_unit: str = "rial") -> bytes:
     data = build_export_data(values, company, year, money_unit)
-    workbook = Workbook()
-    workbook.remove(workbook.active)
-    navy = "102A56"; blue = "246BCE"; pale = "EAF4FF"; white = "FFFFFF"
-    thin = Side(style="thin", color="CAD8E8")
-    for code, statement_title in STATEMENT_TITLES.items():
-        sheet = workbook.create_sheet(statement_title)
-        sheet.sheet_view.rightToLeft = True
-        sheet.freeze_panes = "A5"
-        sheet.merge_cells("A1:C1"); sheet["A1"] = statement_title
-        sheet.merge_cells("A2:C2"); sheet["A2"] = data.company
-        sheet.merge_cells("A3:C3"); sheet["A3"] = f"سال مالی {data.year} — مبالغ به {UNIT_TITLES[data.money_unit]}"
-        sheet.append(["شرح", "مبلغ", "وضعیت"])
-        for cell in sheet[1]:
-            cell.fill = PatternFill("solid", fgColor=navy); cell.font = Font(color=white, bold=True, size=16)
-        for row_index in (2, 3):
-            for cell in sheet[row_index]:
-                cell.font = Font(color=navy, bold=row_index == 2)
-        for cell in sheet[4]:
-            cell.fill = PatternFill("solid", fgColor=blue); cell.font = Font(color=white, bold=True)
-        for export_row in data.statements[code]:
-            status = "نیازمند تکمیل" if export_row.status == "manual_input_required" else ""
-            sheet.append([export_row.title, export_row.amount, status])
-        for row in sheet.iter_rows(min_row=1, max_row=sheet.max_row, min_col=1, max_col=3):
-            for cell in row:
-                cell.alignment = Alignment(horizontal="right" if cell.column != 2 else "center", vertical="center")
-                cell.border = Border(bottom=thin)
-        for cell in sheet[1]: cell.alignment = Alignment(horizontal="center")
-        for cell in sheet[2]: cell.alignment = Alignment(horizontal="center")
-        for cell in sheet[3]: cell.alignment = Alignment(horizontal="center")
-        for row in range(5, sheet.max_row + 1):
-            sheet.cell(row, 2).number_format = '#,##0;[Red]-#,##0;–'
-            if row % 2: 
-                for cell in sheet[row]: cell.fill = PatternFill("solid", fgColor=pale)
-        sheet.column_dimensions["A"].width = 52
-        sheet.column_dimensions["B"].width = 24
-        sheet.column_dimensions["C"].width = 22
-        sheet.row_dimensions[1].height = 32
-        sheet.print_title_rows = "1:4"
-        sheet.page_setup.orientation = "portrait"
-        sheet.page_setup.fitToWidth = 1
-        sheet.sheet_properties.pageSetUpPr.fitToPage = True
+    template = Path(__file__).resolve().parent.parent / "assets" / "financial-statements-template.xlsx"
+    if not template.exists():
+        raise RuntimeError("financial_statement_template_missing")
+    workbook = load_workbook(template, data_only=False, keep_links=True)
+    by_field = {
+        row.field_id: convert_money(row.amount, data.money_unit, "rial") / Decimal(1_000_000)
+        for rows in data.statements.values() for row in rows
+    }
+    amount = lambda field_id: by_field.get(field_id, Decimal(0))
+
+    # Preserve the official workbook exactly: only metadata and designated
+    # current-period input cells are changed. Notes, formatting, print areas,
+    # formulas, merged cells and sheet ordering stay intact.
+    cover = workbook[workbook.sheetnames[0]]
+    cover["A1"] = data.company
+    cover["A3"] = f"سال مالی منتهی به ۲۹ اسفند {data.year}"
+    cover["A5"] = f"سال {data.year}"
+
+    profit = workbook[workbook.sheetnames[2]]
+    for cell in ("F9", "F10", "F12", "F13", "F14", "F15", "F17", "F18", "F21", "F22", "F25"):
+        profit[cell] = 0
+    profit["F9"] = amount("PL.OPERATING_REVENUE")
+    profit["F10"] = -amount("PL.COST_OF_REVENUE")
+    profit["F12"] = -amount("PL.SELLING_ADMIN_EXPENSE")
+    profit["F13"] = -amount("PL.IMPAIRMENT_EXPENSE")
+    profit["F14"] = amount("PL.OTHER_INCOME")
+    profit["F15"] = -amount("PL.OTHER_EXPENSE")
+    profit["F17"] = -amount("PL.FINANCE_COST")
+    profit["F21"] = -amount("PL.INCOME_TAX")
+
+    comprehensive = workbook[workbook.sheetnames[3]]
+    comprehensive["F8"] = amount("PL.NET_PROFIT")
+    comprehensive["F14"] = "=SUM(F8:F13)"
+
+    balance = workbook[workbook.sheetnames[4]]
+    balance_inputs = {
+        "F9": amount("BS.PPE"),
+        "F11": amount("BS.INTANGIBLE_ASSETS"),
+        "F12": amount("BS.LONG_TERM_INVESTMENTS"),
+        "F13": amount("BS.LONG_TERM_RECEIVABLES"),
+        "F14": amount("BS.OTHER_ASSETS"),
+        "F17": amount("BS.PREPAYMENTS"),
+        "F18": amount("BS.INVENTORY"),
+        "F19": amount("BS.TRADE_RECEIVABLES") + amount("BS.OTHER_RECEIVABLES"),
+        "F20": amount("BS.SHORT_TERM_INVESTMENTS"),
+        "F21": amount("BS.CASH"),
+        "F28": amount("BS.CAPITAL"),
+        "F29": amount("BS.CAPITAL_IN_PROGRESS"),
+        "F32": amount("BS.LEGAL_RESERVE"),
+        "F33": amount("BS.OTHER_RESERVES"),
+        "F36": amount("BS.RETAINED_EARNINGS") + amount("BS.CURRENT_YEAR_PROFIT_LOSS"),
+        "F41": amount("BS.LONG_TERM_PAYABLES"),
+        "F43": amount("BS.LONG_TERM_BORROWINGS"),
+        "F44": amount("BS.EMPLOYEE_BENEFITS"),
+        "F47": amount("BS.TRADE_PAYABLES") + amount("BS.OTHER_PAYABLES"),
+        "F48": amount("BS.TAX_PAYABLE"),
+        "F49": amount("BS.DIVIDEND_PAYABLE"),
+        "F50": amount("BS.SHORT_TERM_BORROWINGS"),
+        "F51": amount("BS.PROVISIONS"),
+        "F52": amount("BS.OTHER_CURRENT_LIABILITIES"),
+    }
+    for cell, value in balance_inputs.items():
+        balance[cell] = value
+
+    equity = workbook[workbook.sheetnames[5]]
+    equity_inputs = {
+        "C41": amount("BS.CAPITAL"), "E41": amount("BS.CAPITAL_IN_PROGRESS"),
+        "K41": amount("BS.LEGAL_RESERVE"), "M41": amount("BS.OTHER_RESERVES"),
+        "S41": amount("BS.RETAINED_EARNINGS") + amount("BS.CURRENT_YEAR_PROFIT_LOSS"),
+        "S29": amount("PL.NET_PROFIT"),
+    }
+    for cell, value in equity_inputs.items():
+        equity[cell] = value
+    equity["W41"] = "=SUM(C41:U41)"
+
+    cash_flow = workbook[workbook.sheetnames[6]]
+    cash_flow["F50"] = amount("CF.MANUAL")
+    cash_flow["F53"] = "=SUM(F50:F52)"
+
+    # Remove template sample-period figures while retaining the comparative
+    # columns and their formatting for future real comparative data.
+    for sheet in (profit, comprehensive, balance, cash_flow):
+        for row in range(1, sheet.max_row + 1):
+            for column in (8, 10):
+                if column <= sheet.max_column:
+                    cell = sheet.cell(row, column)
+                    if not isinstance(cell, MergedCell):
+                        cell.value = None
+    workbook.calculation.fullCalcOnLoad = True
+    workbook.calculation.forceFullCalc = True
+    workbook.calculation.calcMode = "auto"
     output = io.BytesIO(); workbook.save(output); return output.getvalue()
 
 
