@@ -318,6 +318,8 @@ class AccountMappingService:
             ("1212", "BS.LONG_TERM_INVESTMENTS", 1),
             ("1213", "BS.LONG_TERM_RECEIVABLES", 1),
             ("12", "BS.OTHER_ASSETS", 1),
+            ("211127", "BS.TAX_PAYABLE", -1),
+            ("211130", "BS.TAX_PAYABLE", -1),
             ("2110", "BS.TRADE_PAYABLES", -1),
             ("2111", "BS.OTHER_PAYABLES", -1),
             ("2112", "BS.TAX_PAYABLE", -1),

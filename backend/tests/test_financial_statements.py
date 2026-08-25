@@ -171,7 +171,7 @@ def test_finalized_ledger_chart_mapping_is_precise():
     expected = {
         "111306": ("BS.OTHER_RECEIVABLES", 1),
         "211001": ("BS.TRADE_PAYABLES", -1),
-        "211127": ("BS.OTHER_PAYABLES", -1),
+        "211127": ("BS.TAX_PAYABLE", -1),
         "221201": ("BS.EMPLOYEE_BENEFITS", -1),
         "311301": ("BS.RETAINED_EARNINGS", -1),
         "311401": ("BS.CURRENT_YEAR_PROFIT_LOSS", -1),
