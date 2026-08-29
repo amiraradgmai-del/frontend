@@ -113,11 +113,19 @@ async def upload_import(request: Request, user: Annotated[User, Depends(require_
     _owns(session, user, organization_id); year = session.get(FinancialFiscalYear, fiscal_year_id)
     if year is None or year.organization_id != organization_id: raise HTTPException(422, "سال مالی معتبر نیست")
     extension = "." + file.filename.rsplit(".", 1)[-1].lower() if file.filename and "." in file.filename else ""
-    if extension not in ALLOWED or file.content_type not in ALLOWED[extension]: raise HTTPException(415, "فقط فایل Excel یا PDF معتبر قابل پذیرش است")
+    if extension not in ALLOWED: raise HTTPException(415, "فقط فایل Excel یا PDF معتبر قابل پذیرش است")
     if money_unit not in {"rial", "toman"}: raise HTTPException(422, "واحد پول باید ریال یا تومان باشد")
     data = await file.read(MAX_FILE_SIZE + 1)
     if not data: raise HTTPException(422, "فایل خالی است")
     if len(data) > MAX_FILE_SIZE: raise HTTPException(413, "حجم فایل بیشتر از حد مجاز است")
+    # MIME values vary between browsers/proxies. Validate the actual file
+    # signature so valid workbooks (including numeric filenames) are accepted.
+    if extension == ".xlsx" and not data.startswith(b"PK\x03\x04"):
+        raise HTTPException(415, "ساختار فایل XLSX معتبر نیست")
+    if extension == ".xls" and not (data.startswith(b"\xd0\xcf\x11\xe0") or data.lstrip().startswith((b"<?xml", b"\xef\xbb\xbf<?xml"))):
+        raise HTTPException(415, "ساختار فایل XLS معتبر نیست")
+    if extension == ".pdf" and not data.startswith(b"%PDF-"):
+        raise HTTPException(415, "ساختار فایل PDF معتبر نیست")
     digest = sha256(data)
     duplicate = session.scalar(select(FinancialStatementImport).where(FinancialStatementImport.organization_id == organization_id, FinancialStatementImport.fiscal_year_id == fiscal_year_id, FinancialStatementImport.file_hash == digest))
     if duplicate and not allow_duplicate: raise HTTPException(409, detail={"code": "duplicate_file", "import_id": duplicate.id, "message": "این فایل قبلاً برای همین شرکت و سال مالی بارگذاری شده است."})

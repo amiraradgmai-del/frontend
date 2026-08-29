@@ -359,22 +359,6 @@ class AccountMappingService:
                 match = None
                 target_field_id, sign_multiplier = fallback
                 amount_source = "net_closing"
-                if (
-                    target_field_id.startswith("PL.")
-                    and row.closing_debit == 0 and row.closing_credit == 0
-                    and (row.period_debit != 0 or row.period_credit != 0)
-                ):
-                    # Closed ledgers zero income/expense balances at year-end;
-                    # the closing entry can make debit and credit turnover equal.
-                    # In that case use the account's natural side; otherwise use
-                    # the net movement before applying the normal sign rule.
-                    if row.period_debit == row.period_credit:
-                        amount_source = (
-                            "period_credit" if sign_multiplier == -1 else "period_debit"
-                        )
-                        sign_multiplier = 1
-                    else:
-                        amount_source = "net_period"
                 confidence = self._fallback_confidence(fallback_code)
             else:
                 target_field_id = match.target_field_id if match else None
@@ -621,41 +605,6 @@ class FinancialStatementCalculationService:
         if not has_income_statement_rows:
             return "warning", Decimal(0), "حساب‌های درآمد و هزینه برای تطبیق سود و زیان جاری موجود نیست."
 
-        # Some closed ledgers carry the final result in equity but omit a
-        # separate income-tax expense row after closing. When profit before
-        # tax and the authoritative current-year result are both available,
-        # recover only the missing tax line from their exact reconciliation.
-        profit_before_tax = values.get("PL.PROFIT_BEFORE_TAX")
-        income_tax = values.get("PL.INCOME_TAX")
-        if (
-            profit_before_tax is not None and income_tax is not None
-            and income_tax.final_value == 0
-        ):
-            performance_tax = sum((
-                row.closing_credit - row.closing_debit
-                for _, row in decisions
-                if (row.subsidiary_code or row.general_code).startswith("211127")
-            ), Decimal(0))
-            if performance_tax > 0:
-                income_tax.calculated_value = performance_tax
-                income_tax.final_value = performance_tax + income_tax.adjustment_value
-                income_tax.status = "reconciled_from_tax_payable"
-                derived.calculated_value = profit_before_tax.final_value - income_tax.final_value
-                derived.final_value = derived.calculated_value + derived.adjustment_value
-                derived.status = "reconciled_from_tax_payable"
-        if (
-            profit_before_tax is not None and income_tax is not None
-            and income_tax.final_value == 0 and current.final_value != 0
-        ):
-            inferred_tax = profit_before_tax.final_value - abs(current.final_value)
-            if inferred_tax > 0 and inferred_tax <= abs(profit_before_tax.final_value):
-                income_tax.calculated_value = inferred_tax
-                income_tax.final_value = inferred_tax + income_tax.adjustment_value
-                income_tax.status = "reconciled_from_closed_ledger"
-                derived.calculated_value = profit_before_tax.final_value - income_tax.final_value
-                derived.final_value = derived.calculated_value + derived.adjustment_value
-                derived.status = "reconciled_from_closed_ledger"
-
         trial_balance_result = current.final_value
         reconciliation_difference = derived.final_value - abs(trial_balance_result)
         assets = values.get("BS.TOTAL_ASSETS").final_value if values.get("BS.TOTAL_ASSETS") else Decimal(0)
@@ -827,6 +776,12 @@ def workbook_export(values, company: str, year: str, money_unit: str = "rial") -
     profit["F15"] = -amount("PL.OTHER_EXPENSE")
     profit["F17"] = -amount("PL.FINANCE_COST")
     profit["F21"] = -amount("PL.INCOME_TAX")
+    # Store calculated totals as values. This keeps exports correct in viewers
+    # that do not run Excel's formula engine (browser previews, mobile apps).
+    profit["F11"] = amount("PL.GROSS_PROFIT")
+    profit["F16"] = amount("PL.OPERATING_PROFIT")
+    profit["F19"] = amount("PL.PROFIT_BEFORE_TAX")
+    profit["F22"] = amount("PL.NET_PROFIT")
 
     comprehensive = workbook[workbook.sheetnames[3]]
     comprehensive["F8"] = amount("PL.NET_PROFIT")
@@ -861,6 +816,15 @@ def workbook_export(values, company: str, year: str, money_unit: str = "rial") -
     }
     for cell, value in balance_inputs.items():
         balance[cell] = value
+    balance["F15"] = sum((balance_inputs[cell] for cell in ("F9", "F11", "F12", "F13", "F14")), Decimal(0))
+    balance["F24"] = sum((balance_inputs[cell] for cell in ("F17", "F18", "F19", "F20", "F21")), Decimal(0))
+    balance["F25"] = amount("BS.TOTAL_ASSETS")
+    balance["F38"] = amount("BS.TOTAL_EQUITY")
+    balance["F45"] = sum((balance_inputs[cell] for cell in ("F41", "F43", "F44")), Decimal(0))
+    balance["F55"] = sum((balance_inputs[cell] for cell in ("F47", "F48", "F49", "F50", "F51", "F52")), Decimal(0))
+    balance["F56"] = amount("BS.TOTAL_LIABILITIES")
+    # The supplied template double-counted non-current liabilities in F57.
+    balance["F57"] = amount("BS.TOTAL_LIABILITIES_EQUITY")
 
     equity = workbook[workbook.sheetnames[5]]
     equity_inputs = {
@@ -871,11 +835,11 @@ def workbook_export(values, company: str, year: str, money_unit: str = "rial") -
     }
     for cell, value in equity_inputs.items():
         equity[cell] = value
-    equity["W41"] = "=SUM(C41:U41)"
+    equity["W41"] = amount("BS.TOTAL_EQUITY")
 
     cash_flow = workbook[workbook.sheetnames[6]]
     cash_flow["F50"] = amount("CF.MANUAL")
-    cash_flow["F53"] = "=SUM(F50:F52)"
+    cash_flow["F53"] = amount("CF.MANUAL")
 
     # Remove template sample-period figures while retaining the comparative
     # columns and their formatting for future real comparative data.

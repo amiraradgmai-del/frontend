@@ -85,7 +85,7 @@ export default function FinancialStatementsPage() {
   }
   async function upload() {
     if (!file || !organizationId || !yearId) return setMessage("شرکت، سال مالی و فایل تراز را مشخص کنید.");
-    const form = new FormData(); form.append("organization_id", organizationId); form.append("fiscal_year_id", yearId); form.append("money_unit", moneyUnit); form.append("file", file); setBusy("upload");
+    const form = new FormData(); form.append("organization_id", organizationId); form.append("fiscal_year_id", yearId); form.append("money_unit", moneyUnit); form.append("allow_duplicate", "true"); form.append("file", file); setBusy("upload");
     try { const item = await api<ImportSummary>("api/v1/financial-statements/imports", { method: "POST", body: form }); setSelectedImport(item); setImports((old) => [item, ...old]); setMessage("فایل امن بارگذاری شد؛ اکنون پردازش را شروع کنید."); } catch (error) { showError(error); } finally { setBusy(""); }
   }
   async function openImport(item: ImportSummary) {
