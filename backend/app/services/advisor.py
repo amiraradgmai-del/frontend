@@ -440,7 +440,10 @@ class AdvisorService:
     ) -> AskResponse:
         agent = get_agent(None if assistant_code == "auto" else assistant_code, question)
         conversation = self._conversation(conversation_id, question, user)
-        ai_question = self._question_with_memory(question, conversation, user)
+        ai_question = (
+            f"دستور تخصصی این گفتگو: {agent.system_prompt}\n\n"
+            f"پرسش و سابقه کاربر:\n{self._question_with_memory(question, conversation, user)}"
+        )
         self.repository.add_message(conversation.id, "user", question)
         rules = evaluate_question(question)
         mandatory_clarification = self._requires_period_clarification(
