@@ -23,7 +23,7 @@ from app.schemas.advisor import AskResponse, CitationResponse
 from app.services.advisor_rules import evaluate_question
 from app.services.site import get_ai_policy
 from app.ai.providers import AnswerProvider, DisabledAIProvider, EmbeddingProvider, cosine_similarity
-from app.ai.orchestrator import select_agent
+from app.ai.orchestrator import get_agent
 
 DISCLAIMER = "این پاسخ صرفاً اطلاعات عمومی است و جایگزین مشاوره تخصصی مالیاتی نیست."
 STOP_WORDS = {
@@ -436,8 +436,9 @@ class AdvisorService:
         *,
         as_of_date: date | None = None,
         topics: list[str] | None = None,
+        assistant_code: str = "auto",
     ) -> AskResponse:
-        agent = select_agent(question)
+        agent = get_agent(None if assistant_code == "auto" else assistant_code, question)
         conversation = self._conversation(conversation_id, question, user)
         ai_question = self._question_with_memory(question, conversation, user)
         self.repository.add_message(conversation.id, "user", question)
