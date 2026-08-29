@@ -9,6 +9,7 @@ class AskRequest(BaseModel):
     conversation_id: str | None = None
     as_of_date: date | None = None
     topics: list[str] = Field(default_factory=list, max_length=10)
+    assistant_code: Literal["auto", "tax", "accounting", "legal", "support"] = "auto"
 
 
 class CitationResponse(BaseModel):

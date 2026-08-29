@@ -27,3 +27,8 @@ def select_agent(question: str) -> AgentDecision:
     if any(term in normalized for term in ("ورود", "رمز", "اشتراک", "پرداخت", "پشتیبانی", "کار با سایت")):
         return AGENTS["support"]
     return AGENTS["tax"]
+
+
+def get_agent(code: str | None, question: str) -> AgentDecision:
+    """Honor an explicit UI choice; otherwise route from the question."""
+    return AGENTS.get(code or "") or select_agent(question)

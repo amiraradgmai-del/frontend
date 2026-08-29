@@ -56,6 +56,7 @@ def ask(payload: AskRequest, user: Annotated[User, Depends(get_current_user)], s
             user,
             as_of_date=payload.as_of_date,
             topics=payload.topics,
+            assistant_code=payload.assistant_code,
         )
     except ConversationNotFoundError:
         raise HTTPException(status_code=404, detail="Conversation not found") from None
@@ -70,7 +71,7 @@ def ask_stream(payload: AskRequest, user: Annotated[User, Depends(get_current_us
     def events():
         yield json.dumps({"type": "status", "message": "در حال بررسی پرسش"}, ensure_ascii=False) + "\n"
         try:
-            result = service.ask(payload.question, payload.conversation_id, user, as_of_date=payload.as_of_date, topics=payload.topics)
+            result = service.ask(payload.question, payload.conversation_id, user, as_of_date=payload.as_of_date, topics=payload.topics, assistant_code=payload.assistant_code)
             yield json.dumps({"type": "result", "data": result.model_dump(mode="json")}, ensure_ascii=False) + "\n"
         except ConversationNotFoundError:
             yield json.dumps({"type": "error", "message": "گفت‌وگو پیدا نشد"}, ensure_ascii=False) + "\n"
