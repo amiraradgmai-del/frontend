@@ -232,7 +232,7 @@ export default function ChatPage() {
 
   return (
     <div
-      className="-mx-4 -my-7 h-[calc(100dvh-5rem)] overflow-hidden bg-[#f5f9ff] sm:-mx-6 sm:-my-10 xl:grid xl:grid-cols-[17rem_22rem_minmax(0,1fr)]"
+      className="h-[calc(100dvh-8.5rem)] min-h-[42rem] gap-3 overflow-hidden rounded-[2rem] bg-blue-50/60 p-3 shadow-inner xl:grid xl:grid-cols-[17rem_22rem_minmax(0,1fr)]"
       dir="rtl"
     >
       <HistoryPanel
@@ -248,7 +248,7 @@ export default function ChatPage() {
         onSelect={(code) => setAssistantCode(code)}
         className="hidden xl:flex"
       />
-      <main className="flex h-full min-w-0 flex-col bg-white/70">
+      <main className="flex h-full min-w-0 flex-col overflow-hidden rounded-[1.6rem] border border-blue-100 bg-white/80 shadow-xl shadow-blue-950/5">
         <header className="flex h-[76px] shrink-0 items-center justify-between border-b border-blue-100 bg-white/90 px-4 backdrop-blur sm:px-6">
           <div className="flex items-center gap-3">
             <div
@@ -424,7 +424,7 @@ function HistoryPanel({
 }) {
   return (
     <aside
-      className={`${className} min-h-0 flex-col border-l border-blue-100 bg-slate-950 p-4 text-white`}
+      className={`${className} min-h-0 flex-col overflow-hidden rounded-[1.6rem] bg-slate-950 p-4 text-white shadow-xl shadow-slate-950/10`}
     >
       <div className="mb-5 flex items-center gap-3 px-2">
         <div className="flex size-10 items-center justify-center rounded-xl bg-blue-600">
@@ -491,7 +491,7 @@ function AssistantPanel({
 }) {
   return (
     <aside
-      className={`${className} min-h-0 flex-col border-l border-blue-100 bg-white`}
+      className={`${className} min-h-0 flex-col overflow-hidden rounded-[1.6rem] border border-blue-100 bg-white shadow-xl shadow-blue-950/5`}
     >
       <div className="border-b border-blue-100 p-5">
         <p className="text-xs font-bold text-blue-600">کارشناسان هوشمند</p>

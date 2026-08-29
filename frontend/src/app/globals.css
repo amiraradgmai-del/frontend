@@ -242,6 +242,73 @@ main select:focus {
   box-shadow: 0 0 0 4px rgb(59 130 246 / 0.1) !important;
 }
 
+/* Route-level architecture shared by every user and staff screen. */
+[data-app-content] > * {
+  width: 100%;
+  animation: page-enter 240ms ease-out both;
+}
+
+[data-app-content] [data-slot="card"],
+[data-app-content] section[class*="border"],
+[data-app-content] div[class*="rounded-3xl"] {
+  backdrop-filter: blur(10px);
+}
+
+[data-app-content] form {
+  accent-color: #2563eb;
+}
+
+[data-app-content] table {
+  border: 1px solid #dbeafe;
+  box-shadow: 0 16px 42px -34px rgb(15 23 42 / 0.35);
+}
+
+[data-app-content] [role="dialog"] {
+  border-radius: 1.5rem;
+  border: 1px solid #dbeafe;
+  box-shadow: 0 30px 80px -35px rgb(15 23 42 / 0.45);
+}
+
+[data-route*="/management"],
+[data-route*="/admin"],
+[data-route*="/support"],
+[data-route*="/consultant"] {
+  --card-spacing: 1.15rem;
+}
+
+[data-route$="/chat"] {
+  max-width: none !important;
+  padding-top: 1rem !important;
+  padding-bottom: 1rem !important;
+}
+
+@keyframes page-enter {
+  from {
+    opacity: 0;
+    transform: translateY(5px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@media (max-width: 640px) {
+  [data-app-content] {
+    padding-inline: 0.75rem !important;
+  }
+  [data-app-content] h1 {
+    font-size: clamp(1.45rem, 7vw, 2rem);
+    line-height: 1.45;
+  }
+  [data-app-content] table {
+    min-width: 42rem;
+  }
+  [data-app-content] div:has(> table) {
+    overflow-x: auto;
+  }
+}
+
 @media (prefers-reduced-motion: reduce) {
   *,
   *::before,

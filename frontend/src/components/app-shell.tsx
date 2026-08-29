@@ -528,8 +528,12 @@ export function AppShell({ children }: { children: React.ReactNode }) {
         <Account user={user} role={role} logout={logout} />
       </aside>
 
-      <main className="min-w-0 p-4 sm:p-7 lg:p-10">
-        <div className="mx-auto max-w-6xl">{children}</div>
+      <main
+        data-app-content
+        data-route={pathname}
+        className="min-w-0 p-4 sm:p-7 lg:p-9"
+      >
+        <div className="mx-auto w-full max-w-[1440px]">{children}</div>
       </main>
     </div>
   );
@@ -899,7 +903,11 @@ function UserShell({
         </div>
       )}
 
-      <main className="mx-auto min-h-[70vh] max-w-7xl px-4 py-7 sm:px-6 sm:py-10">
+      <main
+        data-app-content
+        data-route={pathname}
+        className="mx-auto min-h-[70vh] w-full max-w-[1600px] px-4 py-7 sm:px-6 sm:py-10"
+      >
         {children}
       </main>
 
