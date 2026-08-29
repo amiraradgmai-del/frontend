@@ -109,7 +109,7 @@ def imports(user: Annotated[User, Depends(require_permissions("financial_stateme
 
 
 @router.post("/imports", status_code=201)
-async def upload_import(request: Request, user: Annotated[User, Depends(require_permissions("financial_statements:upload"))], session: Annotated[Session, Depends(get_session)], organization_id: Annotated[str, Form()], fiscal_year_id: Annotated[str, Form()], money_unit: Annotated[str, Form()], allow_duplicate: Annotated[bool, Form()] = False, file: UploadFile = File(...)):
+async def upload_import(request: Request, user: Annotated[User, Depends(require_permissions("financial_statements:upload"))], session: Annotated[Session, Depends(get_session)], organization_id: Annotated[str, Form()], fiscal_year_id: Annotated[str, Form()], money_unit: Annotated[str, Form()], allow_duplicate: Annotated[bool, Form()] = True, file: UploadFile = File(...)):
     _owns(session, user, organization_id); year = session.get(FinancialFiscalYear, fiscal_year_id)
     if year is None or year.organization_id != organization_id: raise HTTPException(422, "سال مالی معتبر نیست")
     extension = "." + file.filename.rsplit(".", 1)[-1].lower() if file.filename and "." in file.filename else ""
