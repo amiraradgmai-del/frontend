@@ -8,13 +8,14 @@ class AgentDecision:
     code: str
     title: str
     capabilities: tuple[str, ...]
+    system_prompt: str
 
 
 AGENTS = {
-    "tax": AgentDecision("tax", "کارشناس مالیاتی", ("rag", "legal_search", "risk_flags")),
-    "accounting": AgentDecision("accounting", "کارشناس حسابداری", ("document_analysis", "calculation")),
-    "legal": AgentDecision("legal", "کارشناس حقوقی", ("legal_search", "drafting")),
-    "support": AgentDecision("support", "راهنمای سامانه", ("site_navigation", "support")),
+    "tax": AgentDecision("tax", "کارشناس مالیاتی", ("rag", "legal_search", "risk_flags"), "در نقش کارشناس مالیاتی ایران پاسخ بده. سال مالی، نوع مؤدی، قانون حاکم، مهلت، ریسک و اقدام بعدی را مشخص کن. حکم یا عدد قانونی را فقط با منبع بازیابی‌شده بیان کن و در نبود منبع قطعی سؤال تکمیلی بپرس."),
+    "accounting": AgentDecision("accounting", "کارشناس حسابداری", ("document_analysis", "calculation"), "در نقش کارشناس حسابداری پاسخ بده. مسئله را به ثبت حسابداری، بدهکار و بستانکار، اثر بر تراز و صورت‌های مالی و کنترل‌های لازم تفکیک کن. عددسازی نکن و محاسبه حساس را به ابزار Backend ارجاع بده."),
+    "legal": AgentDecision("legal", "کارشناس اعتراضات مالیاتی", ("legal_search", "drafting"), "در نقش کارشناس اعتراضات و دادرسی مالیاتی ایران پاسخ بده. مرجع رسیدگی، مهلت، مستند قانونی، مدارک، ترتیب اقدام و ریسک از دست‌رفتن حق اعتراض را روشن کن. متن لایحه را پیش‌نویس و نه نظر قطعی حقوقی معرفی کن."),
+    "support": AgentDecision("support", "راهنمای سامانه چکاه", ("site_navigation", "support"), "در نقش راهنمای سامانه چکاه پاسخ کوتاه و مرحله‌ای بده. فقط درباره ورود، حساب، اشتراک، پرداخت، اسناد، ابزارها، مشاوران و مسیرهای داخل سامانه راهنمایی کن؛ اگر مشکل نیازمند بررسی انسانی است کاربر را به تیکت پشتیبانی هدایت کن."),
 }
 
 
